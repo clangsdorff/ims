@@ -14,7 +14,7 @@ class PhhImsBroadcastReceiver : BroadcastReceiver() {
         private const val TAG = "PHH ImsBroadcastReceiver"
     }
 
-    val ALARM_PERIODIC_REGISTER = "me.phh.ims.ALARM_PERIODIC_REGISTER"
+    val ALARM_PERIODIC_REGISTER = "com.langsdorff.flossims.ALARM_PERIODIC_REGISTER"
 
     override fun onReceive(ctxt: Context, intent: Intent) {
         Rlog.d(TAG, "Alarm fired with ${intent.action}")

@@ -56,6 +56,6 @@
       android:exported="false" />-->
       <!--android:enabled="true"-->
     </application>
-    <protected-broadcast android:name="me.phh.ims.ALARM_PERIODIC_REGISTER" />
+    <protected-broadcast android:name="com.langsdorff.flossims.ALARM_PERIODIC_REGISTER" />
 
 </manifest>

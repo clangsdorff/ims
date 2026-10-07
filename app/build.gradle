@@ -8,7 +8,7 @@ android {
     ndkVersion "30.0.16248370"
 
     defaultConfig {
-        applicationId "me.phh.ims"
+        applicationId "com.langsdorff.flossims"
         minSdk 32
         targetSdk 33
         versionCode 48
