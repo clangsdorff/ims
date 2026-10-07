@@ -144,6 +144,7 @@ class SipHandler(val ctxt: Context) {
         null
     var onCancelledCall: ((handle: Object, from: String, extras: Map<String, String>) -> Unit)? =
         null
+    var onOutgoingCallProgress: ((statusCode: Int) -> Unit)? = null
     private val smsLock = ReentrantLock()
     private var smsToken = 0
     private val smsHeadersMap = mutableMapOf<Int, smsHeaders>()
@@ -1019,7 +1020,7 @@ a=sendrecv
         currentCall?.imsMediaSession?.let { imsMediaManager.closeSession(it) }
         callStopped.set(true)
 
-        onCancelledCall?.invoke(Object(), "", emptyMap())
+        onCancelledCall?.invoke(Object(), "", mapOf("local" to "true"))
     }
 
     /*
@@ -1142,6 +1143,8 @@ a=sendrecv
                 }
 
                 if (cseq.contains("ACK")) return@setResponseCallback  false
+
+                if (cseq.contains("INVITE") && !rseqHandled) onOutgoingCallProgress?.invoke(resp.statusCode)
 
                 if (cseq.contains("INVITE") && (resp.statusCode == 200 || resp.statusCode == 202)) {
                     // TODO Send UI that call started

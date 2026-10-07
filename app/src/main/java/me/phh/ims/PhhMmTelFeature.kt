@@ -10,6 +10,7 @@ import android.telephony.ims.ImsReasonInfo
 import android.telephony.ims.ImsStreamMediaProfile
 import android.telephony.ims.feature.ImsFeature
 import android.telephony.ims.stub.ImsCallSessionImplBase
+import android.telephony.ims.stub.ImsCallSessionImplBase.State
 import android.telephony.ims.stub.ImsMultiEndpointImplBase
 import android.telephony.ims.stub.ImsRegistrationImplBase.REGISTRATION_TECH_LTE
 import android.telephony.ims.stub.ImsSmsImplBase
@@ -30,6 +31,8 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
 
     val imsSms = PhhImsSms(slotId)
     lateinit var sipHandler: SipHandler
+    private var callListener: ImsCallSessionListener? = null
+    private var outgoingState = State.IDLE
 
     override fun createCallProfile(callSessionType: Int, callType: Int): ImsCallProfile {
         Rlog.d(TAG, "$slotId createCallProfile $callSessionType $callType")
@@ -42,7 +45,6 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
         Rlog.d(TAG, "$slotId createCallSession")
         return object: ImsCallSessionImplBase() {
             private val mCallId = randomBytes(12).toHex()
-            lateinit var mListener: ImsCallSessionListener
             override fun getCallId(): String {
                 return mCallId
             }
@@ -61,16 +63,25 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
 
             override fun start(callee: String, profile: ImsCallProfile) {
                 Rlog.d(TAG, "Starting call with $callee profile $profile")
+                outgoingState = State.INITIATED
+                sipHandler.onOutgoingCallProgress = { statusCode ->
+                    if (statusCode in 180..189) {
+                        callListener?.callSessionProgressing(profile.mediaProfile)
+                    } else if (statusCode == 200) {
+                        outgoingState = State.ESTABLISHED
+                        callListener?.callSessionInitiated(profile)
+                    }
+                }
                 sipHandler.call(callee)
             }
 
             override fun getState(): Int {
-                return State.ESTABLISHED
+                return outgoingState
             }
 
             override fun setListener(listener: ImsCallSessionListener) {
                 Rlog.d(TAG, "Setting CallListener to $listener")
-                mListener = listener
+                callListener = listener
             }
 
             override fun reject(reason: Int) {
@@ -79,7 +90,7 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
 
             override fun terminate(reason: Int) {
                 Rlog.d(TAG, "Terminating call with reason $reason")
-                mListener.callSessionTerminated(ImsReasonInfo(ImsReasonInfo.CODE_USER_TERMINATED, 0, "Kikoo"))
+                sipHandler.terminateCall()
             }
         }
     }
@@ -126,7 +137,6 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
         sipHandler.onSmsReceived = imsSms::onSmsReceived
         sipHandler.onSmsStatusReportReceived = imsSms::onSmsStatusReportReceived
 
-        var callListener: ImsCallSessionListener? = null
         sipHandler.onIncomingCall = { handle: Object, from: String, extras: Map<String, String> -> 
             val callProfile = ImsCallProfile(ImsCallProfile.SERVICE_TYPE_NORMAL, ImsCallProfile.CALL_TYPE_VOICE,
                 Bundle(),
@@ -138,6 +148,7 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
                     ImsStreamMediaProfile.RTT_MODE_DISABLED,
                 ))
 
+            outgoingState = State.IDLE
             callProfile.setCallExtra(ImsCallProfile.EXTRA_OI, from)
             callProfile.setCallExtra(ImsCallProfile.EXTRA_DISPLAY_TEXT, from)
             notifyIncomingCall(object: ImsCallSessionImplBase() {
@@ -197,24 +208,42 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
             }, Bundle())
         }
         sipHandler.onCancelledCall = { param: Object, s: String, map: Map<String, String> ->
-            Rlog.d(TAG, "Cancelling call")
             val statusCode = map["statusCode"]?.toInt() ?: -1
-            if (statusCode >= 400) {
-                val statusMessage = map["statusString"] ?: "Kikoo"
-                callListener?.callSessionTerminated(ImsReasonInfo(ImsReasonInfo.CODE_NETWORK_REJECT, 0, statusMessage))
-            } else {
-                callListener?.callSessionTerminated(
-                    ImsReasonInfo(
-                        ImsReasonInfo.CODE_USER_TERMINATED_BY_REMOTE,
-                        0,
-                        "Kikoo"
-                    )
-                )
+            val reason = when {
+                statusCode >= 400 -> ImsReasonInfo(sipStatusToReason(statusCode), statusCode, map["statusString"])
+                map["local"] != null -> ImsReasonInfo(ImsReasonInfo.CODE_USER_TERMINATED, 0, null)
+                else -> ImsReasonInfo(ImsReasonInfo.CODE_USER_TERMINATED_BY_REMOTE, 0, null)
             }
+            Rlog.d(TAG, "Call ended in outgoing state ${State.toString(outgoingState)}: $reason")
+            if (outgoingState == State.INITIATED && statusCode >= 400) {
+                callListener?.callSessionInitiatingFailed(reason)
+            } else {
+                callListener?.callSessionTerminated(reason)
+            }
+            outgoingState = State.TERMINATED
         }
 
         imsService.getRegistration(slotId).onRegistering(REGISTRATION_TECH_LTE)
         sipHandler.getVolteNetwork()
+    }
+
+    private fun sipStatusToReason(statusCode: Int): Int = when (statusCode) {
+        400 -> ImsReasonInfo.CODE_SIP_BAD_REQUEST
+        403 -> ImsReasonInfo.CODE_SIP_FORBIDDEN
+        404 -> ImsReasonInfo.CODE_SIP_NOT_FOUND
+        408 -> ImsReasonInfo.CODE_SIP_REQUEST_TIMEOUT
+        480 -> ImsReasonInfo.CODE_SIP_TEMPRARILY_UNAVAILABLE
+        484 -> ImsReasonInfo.CODE_SIP_BAD_ADDRESS
+        486, 600 -> ImsReasonInfo.CODE_SIP_BUSY
+        487 -> ImsReasonInfo.CODE_SIP_REQUEST_CANCELLED
+        488, 606 -> ImsReasonInfo.CODE_SIP_NOT_ACCEPTABLE
+        500 -> ImsReasonInfo.CODE_SIP_SERVER_INTERNAL_ERROR
+        503 -> ImsReasonInfo.CODE_SIP_SERVICE_UNAVAILABLE
+        504 -> ImsReasonInfo.CODE_SIP_SERVER_TIMEOUT
+        603 -> ImsReasonInfo.CODE_SIP_USER_REJECTED
+        in 400..499 -> ImsReasonInfo.CODE_SIP_CLIENT_ERROR
+        in 500..599 -> ImsReasonInfo.CODE_SIP_SERVER_ERROR
+        else -> ImsReasonInfo.CODE_SIP_GLOBAL_ERROR
     }
 
     override fun onFeatureRemoved() {
