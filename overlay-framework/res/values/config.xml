@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+	<!-- Telecom must pick MODE_IN_COMMUNICATION before dialing, or the HAL starts a modem voice call that grabs the mic -->
+	<bool name="config_use_voip_mode_for_ims">true</bool>
+</resources>
