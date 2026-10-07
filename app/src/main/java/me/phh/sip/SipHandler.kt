@@ -886,6 +886,10 @@ a=sendrecv
 
             // DANGER: Don't open the mic before the user acknowledged opening the call!
 
+            // Samsung HAL: MODE_IN_CALL at dial starts a modem voice call that ignores the later
+            // MODE_IN_COMMUNICATION; g_call_state=1 stops it. Other HALs ignore the key.
+            ctxt.getSystemService(AudioManager::class.java).setParameters("g_call_state=1")
+
             val minBufferSize = AudioRecord.getMinBufferSize(8000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
             val audioRecord = AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, 8000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, minBufferSize)
 
