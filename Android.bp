@@ -23,8 +23,8 @@ runtime_resource_overlay {
 
 runtime_resource_overlay {
   name: "PhhImsFrameworkOverlay",
-  resource_dirs: ["overlay-framework/res"],
-  manifest: "overlay-framework/AndroidManifest.xml",
+  resource_dirs: ["module/overlay-framework/res"],
+  manifest: "module/overlay-framework/AndroidManifest.xml",
   certificate: "platform",
   product_specific: true,
 }
