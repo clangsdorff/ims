@@ -541,7 +541,13 @@ class SipHandler(val ctxt: Context) {
 
     @SuppressLint("MissingPermission")
     private fun accessNetworkInfo(): SipHeadersMap {
-        val id = telephonyManager.allCellInfo
+        val cells = try {
+            telephonyManager.allCellInfo
+        } catch (e: SecurityException) {
+            Rlog.w(TAG, "No location permission, sending no P-Access-Network-Info")
+            return emptyMap()
+        }
+        val id = cells
             .filterIsInstance<CellInfoLte>()
             .firstOrNull { it.isRegistered }
             ?.cellIdentity ?: return emptyMap()
@@ -557,7 +563,7 @@ class SipHandler(val ctxt: Context) {
     fun register(_writer: OutputStream? = null) {
         val tm = ctxt.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
 
-        val cellInfoList = tm.getAllCellInfo()
+        val cellInfoList = try { tm.getAllCellInfo() } catch (e: SecurityException) { emptyList() }
         for(cell in cellInfoList) {
             if(cell is CellInfoLte) {
                 val cellIdentity = cell.cellIdentity
