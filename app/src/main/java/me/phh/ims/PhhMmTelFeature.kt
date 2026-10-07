@@ -151,6 +151,9 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
             outgoingState = State.IDLE
             callProfile.setCallExtra(ImsCallProfile.EXTRA_OI, from)
             callProfile.setCallExtra(ImsCallProfile.EXTRA_DISPLAY_TEXT, from)
+            callProfile.setCallExtraInt(ImsCallProfile.EXTRA_OIR,
+                if (extras["privacy"] == "true") ImsCallProfile.OIR_PRESENTATION_RESTRICTED
+                else ImsCallProfile.OIR_PRESENTATION_NOT_RESTRICTED)
             notifyIncomingCall(object: ImsCallSessionImplBase() {
                 var mState = State.IDLE
                 override fun getCallProfile(): ImsCallProfile {
