@@ -24,6 +24,9 @@ import kotlinx.coroutines.launch
 import java.io.*
 import java.net.*
 import java.util.concurrent.Executor
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.thread
@@ -124,6 +127,7 @@ class SipHandler(val ctxt: Context) {
     lateinit var ipsecSettings: SipIpsecSettings
 
     lateinit private var network: Network
+    @Volatile private var imsNetwork: Network? = null
 
     lateinit private var plainSocket: SipConnection
     lateinit private var socket: SipConnection
@@ -221,32 +225,46 @@ class SipHandler(val ctxt: Context) {
     }
 
     private var reconnectDelayMs = 5_000L
+    private val connectExecutor = Executors.newSingleThreadScheduledExecutor()
+    private var pendingConnect: ScheduledFuture<*>? = null
+
+    private fun scheduleConnect(delayMs: Long): Unit = synchronized(connectExecutor) {
+        pendingConnect?.cancel(false)
+        Rlog.d(TAG, "Connecting in $delayMs ms")
+        pendingConnect = connectExecutor.schedule({
+            if (imsNetwork == null) {
+                Rlog.d(TAG, "No IMS network, waiting for it")
+                return@schedule
+            }
+            try {
+                connect()
+                reconnectDelayMs = 5_000L
+            } catch (t: Throwable) {
+                Rlog.w(TAG, "Connect failed", t)
+                imsFailureCallback?.invoke()
+                reconnectDelayMs = minOf(reconnectDelayMs * 2, 120_000L)
+                scheduleConnect(reconnectDelayMs)
+            }
+        }, delayMs, TimeUnit.MILLISECONDS)
+    }
+
     private fun reconnect() {
         imsReady = false
         imsFailureCallback?.invoke()
         runCatching { serverSocket.serverSocket.close() }
         runCatching { serverSocketUdp.socket.close() }
-        thread {
-            Rlog.d(TAG, "Reconnecting in $reconnectDelayMs ms")
-            Thread.sleep(reconnectDelayMs)
-            try {
-                connect()
-                reconnectDelayMs = 5_000L
-            } catch (t: Throwable) {
-                Rlog.w(TAG, "Reconnect failed", t)
-                reconnectDelayMs = minOf(reconnectDelayMs * 2, 120_000L)
-                reconnect()
-            }
-        }
+        scheduleConnect(reconnectDelayMs)
     }
 
     var abandonnedBecauseOfNoPcscf = false
     fun connect() {
         abandonnedBecauseOfNoPcscf = false
         Rlog.d(TAG, "Trying to connect to SIP server")
+        network = imsNetwork ?: throw IllegalStateException("No IMS network")
         val lp = connectivityManager.getLinkProperties(network)
+            ?: throw IllegalStateException("IMS network has no link properties")
         Rlog.d(TAG, "Got link properties $lp")
-        val pcscfs = (lp!!.javaClass.getMethod("getPcscfServers").invoke(lp) as List<*>).sortedBy { if(it is Inet6Address) 0 else 1 }
+        val pcscfs = (lp.javaClass.getMethod("getPcscfServers").invoke(lp) as List<*>).sortedBy { if(it is Inet6Address) 0 else 1 }
         val pcscf = if (pcscfs.isNotEmpty()) {
             pcscfs[0] as InetAddress
         } else {
@@ -303,9 +321,7 @@ class SipHandler(val ctxt: Context) {
         Rlog.d(TAG, "Received $plainRegReply")
         plainSocket.close()
         if (plainRegReply !is SipResponse || plainRegReply.statusCode != 401) {
-            Rlog.w(TAG, "Didn't get expected response from initial register, aborting")
-            imsFailureCallback?.invoke()
-            return
+            throw IllegalStateException("Unexpected reply to initial REGISTER: $plainRegReply")
         }
 
         val (wwwAuthenticateType, wwwAuthenticateParams) =
@@ -403,9 +419,7 @@ class SipHandler(val ctxt: Context) {
         Rlog.d(TAG, "Received $regReply")
 
         if (regReply !is SipResponse || regReply.statusCode != 200) {
-            Rlog.w(TAG, "Could not connect, aborting SIP")
-            imsFailureCallback?.invoke()
-            return
+            throw IllegalStateException("REGISTER failed: $regReply")
         }
 
         setResponseCallback(registerHeaders["call-id"]!![0], ::registerCallback)
@@ -422,15 +436,16 @@ class SipHandler(val ctxt: Context) {
         // - connection to server socket
         // start both in threads as we're only called here from network
         // callback from which it's better to return
+        val controlSocket = socket
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                while (parseMessage(socket.gReader(), socket.gWriter())) { }
+                while (parseMessage(controlSocket.gReader(), controlSocket.gWriter())) { }
                 Rlog.w(TAG, "Main/control socket closed by peer")
             } catch(t: Throwable) {
                 Rlog.d(TAG, "Got exception in main/control socket", t)
             }
-            socket.close()
-            reconnect()
+            controlSocket.close()
+            if (socket === controlSocket) reconnect()
         }
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -486,8 +501,11 @@ class SipHandler(val ctxt: Context) {
                     Rlog.d(TAG, "IMS network unavailable")
                 }
 
-                override fun onLost(network: Network) {
+                override fun onLost(lost: Network) {
                     Rlog.d(TAG, "IMS network lost")
+                    if (imsNetwork != lost) return
+                    imsNetwork = null
+                    runCatching { socket.close() }
                 }
 
                 override fun onBlockedStatusChanged(network: Network, blocked: Boolean) {
@@ -513,21 +531,16 @@ class SipHandler(val ctxt: Context) {
                     val pcscfs = linkProperties!!.javaClass.getMethod("getPcscfServers").invoke(linkProperties) as List<*>
                     Rlog.d(TAG, "Got pcscfs $pcscfs")
                     if(pcscfs.isNotEmpty() && abandonnedBecauseOfNoPcscf) {
-                        connect()
+                        scheduleConnect(0)
                     }
                 }
 
                 override fun onAvailable(_network: Network) {
                     Rlog.d(TAG, "Got IMS network.")
-                    if (!this@SipHandler::network.isInitialized) {
-                        network = _network
-                        thread {
-                            Thread.sleep(4000)
-                            connect()
-                        }
-                    } else {
-                        Rlog.d(TAG, "... don't try anything")
-                    }
+                    if (imsNetwork == _network) return
+                    imsNetwork = _network
+                    reconnectDelayMs = 5_000L
+                    scheduleConnect(4000)
                 }
             }
         )
