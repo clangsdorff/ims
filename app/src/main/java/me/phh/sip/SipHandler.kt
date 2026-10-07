@@ -849,6 +849,7 @@ a=sendrecv
         resp.headers["contact"]?.firstOrNull()?.let { extractDestinationFromContact(it) }
 
     private var outgoingInvite: SipRequest? = null
+    private var incomingInvite: SipRequest? = null
 
 
     @SuppressLint("MissingPermission")
@@ -1073,8 +1074,22 @@ a=sendrecv
                 call.remoteTarget,
                 commonHeaders + call.callHeaders.filterKeys { it in listOf("from", "to", "call-id", "route") }
             )
+        } else if (call?.outgoing == false && callStarted.get() && incomingInvite != null) {
+            // RFC 3261 12.1.1: a UAS uses Record-Route in order and the caller's Contact as target
+            val invite = incomingInvite!!
+            SipRequest(
+                SipMethod.BYE,
+                extractDestinationFromContact(invite.headers["contact"]!![0]),
+                commonHeaders + mapOf(
+                    "from" to call.callHeaders["to"]!!,
+                    "to" to invite.headers["from"]!!,
+                    "call-id" to invite.headers["call-id"]!!,
+                    "route" to invite.headers.getOrDefault("record-route", emptyList())
+                        .flatMap { it.split(Regex(",\\s*(?=<)")) })
+            )
         } else null
         outgoingInvite = null
+        incomingInvite = null
         // ImsCallSessionImplBase calls terminate() on the main thread
         if (msg != null) thread {
             Rlog.d(TAG, "Sending $msg")
@@ -1475,6 +1490,7 @@ a=sendrecv
         callStopped.set(false)
         callStarted.set(false)
         incomingToTags[request.headers["call-id"]!![0]] = randomBytes(6).toHex()
+        incomingInvite = request
 
         val identity = request.headers["p-asserted-identity"]?.firstOrNull() ?: request.headers["from"]!![0]
         val r = Regex(".*(sip|tel):([^@;>]*).*")
