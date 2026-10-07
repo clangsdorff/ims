@@ -9,6 +9,7 @@ import android.telephony.ims.ImsCallSessionListener
 import android.telephony.ims.ImsReasonInfo
 import android.telephony.ims.ImsStreamMediaProfile
 import android.telephony.ims.feature.ImsFeature
+import android.telephony.ims.feature.MmTelFeature
 import android.telephony.ims.stub.ImsCallSessionImplBase
 import android.telephony.ims.stub.ImsCallSessionImplBase.State
 import android.telephony.ims.stub.ImsMultiEndpointImplBase
@@ -64,6 +65,7 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
             override fun start(callee: String, profile: ImsCallProfile) {
                 Rlog.d(TAG, "Starting call with $callee profile $profile")
                 outgoingState = State.INITIATED
+                useAndroidCallAudio()
                 sipHandler.onOutgoingCallProgress = { statusCode ->
                     if (statusCode in 180..189) {
                         callListener?.callSessionProgressing(profile.mediaProfile)
@@ -209,6 +211,7 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
                 }
 
             }, Bundle())
+            useAndroidCallAudio()
         }
         sipHandler.onCancelledCall = cancelled@{ param: Object, s: String, map: Map<String, String> ->
             if (outgoingState == State.TERMINATED) return@cancelled
@@ -229,6 +232,15 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
 
         imsService.getRegistration(slotId).onRegistering(REGISTRATION_TECH_LTE)
         sipHandler.getVolteNetwork()
+    }
+
+    // MmTelFeature.setCallAudioHandler(AUDIO_HANDLER_ANDROID), API 34+: Telecom then uses MODE_IN_COMMUNICATION
+    private fun useAndroidCallAudio() {
+        try {
+            MmTelFeature::class.java.getMethod("setCallAudioHandler", Int::class.javaPrimitiveType).invoke(this, 0)
+        } catch (e: ReflectiveOperationException) {
+            Rlog.w(TAG, "setCallAudioHandler unavailable", e)
+        }
     }
 
     private fun sipStatusToReason(statusCode: Int): Int = when (statusCode) {
