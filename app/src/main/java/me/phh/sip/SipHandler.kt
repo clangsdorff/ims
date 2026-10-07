@@ -815,8 +815,20 @@ a=sendrecv
         val rtpRemotePort: Int,
         val rtpSocket: DatagramSocket,
         val hasEarlyMedia: Boolean,
-        val imsMediaSession: ImsMediaSession? = null
+        val imsMediaSession: ImsMediaSession? = null,
+        val remoteTarget: String? = null,
     )
+
+    // RFC 3261 12.1.2: a UAC builds the dialog route set from Record-Route in reverse order
+    private fun uacRouteSet(resp: SipResponse): SipHeadersMap =
+        mapOf("route" to resp.headers.getOrDefault("record-route", emptyList())
+            .flatMap { it.split(Regex(",\\s*(?=<)")) }
+            .reversed())
+
+    private fun remoteTarget(resp: SipResponse): String? =
+        resp.headers["contact"]?.firstOrNull()?.let { extractDestinationFromContact(it) }
+
+    private var outgoingInvite: SipRequest? = null
 
 
     @SuppressLint("MissingPermission")
@@ -995,7 +1007,7 @@ a=sendrecv
                     To: ${resp.headers["to"]!![0]}
                     From: ${resp.headers["from"]!![0]}
                     Call-Id: $callId
-                    """.toSipHeadersMap()
+                    """.toSipHeadersMap() + uacRouteSet(resp)
             )
         Rlog.d(TAG, "Sending $msg")
         synchronized(socket.gWriter()) { socket.gWriter().write(msg.toByteArray()) }
@@ -1022,9 +1034,31 @@ a=sendrecv
     }
 
     fun terminateCall() {
-        // IDK what packet do we send, but at least we're close rtp
         currentCall?.imsMediaSession?.let { imsMediaManager.closeSession(it) }
         callStopped.set(true)
+
+        val invite = outgoingInvite
+        val call = currentCall
+        val msg = if (invite != null && !callStarted.get()) {
+            val inviteSeq = invite.headers["cseq"]!![0].split(" ")[0]
+            SipRequest(
+                SipMethod.CANCEL,
+                invite.destination,
+                invite.headers.filterKeys { it in listOf("via", "from", "to", "call-id", "route") } +
+                    ("cseq" to listOf("$inviteSeq CANCEL"))
+            )
+        } else if (call?.outgoing == true && call.remoteTarget != null) {
+            SipRequest(
+                SipMethod.BYE,
+                call.remoteTarget,
+                commonHeaders + call.callHeaders.filterKeys { it in listOf("from", "to", "call-id", "route") }
+            )
+        } else null
+        outgoingInvite = null
+        if (msg != null) {
+            Rlog.d(TAG, "Sending $msg")
+            synchronized(socket.gWriter()) { socket.gWriter().write(msg.toByteArray()) }
+        }
 
         onCancelledCall?.invoke(Object(), "", mapOf("local" to "true"))
     }
@@ -1055,6 +1089,9 @@ a=sendrecv
 
     var respInFlight: SipResponse? = null
     fun call(phoneNumber: String) {
+        callStopped.set(false)
+        callStarted.set(false)
+        currentCall = null
         thread {
 
             val rtpSocket = DatagramSocket(0, localAddr)
@@ -1135,6 +1172,7 @@ a=sendrecv
                     myHeaders,
                     sdp
                 )
+            outgoingInvite = msg
             setResponseCallback(msg.headers["call-id"]!![0]) { r: SipResponse ->
                 var resp = r
                 var cseq = resp.headers["cseq"]!![0]
@@ -1163,12 +1201,12 @@ a=sendrecv
                     val msg2 =
                         SipRequest(
                             SipMethod.ACK,
-                            to,
+                            remoteTarget(resp) ?: to,
                             myHeaders - "content-type" + """
                                 CSeq: $cseq ACK
                                 To: $newTo
                                 From: $newFrom
-                                """.toSipHeadersMap()
+                                """.toSipHeadersMap() + uacRouteSet(resp)
                         )
                     synchronized(socket.gWriter()) { socket.gWriter().write(msg2.toByteArray()) }
                     callStarted.set(true)
@@ -1211,7 +1249,8 @@ a=sendrecv
                     dtmfTrack = dtmfTrack,
                     dtmfTrackDesc = dtmfTrackDesc,
                     // Update from/to/call-id based on the response we got to include the remote tag
-                    callHeaders = myHeaders - "require" - "content-type" + ("from" to resp.headers["from"]!!) + ("to" to resp.headers["to"]!!) + ("call-id" to resp.headers["call-id"]!!),
+                    callHeaders = myHeaders - "require" - "content-type" + ("from" to resp.headers["from"]!!) + ("to" to resp.headers["to"]!!) + ("call-id" to resp.headers["call-id"]!!) + uacRouteSet(resp),
+                    remoteTarget = remoteTarget(resp),
                     rtpRemoteAddr = rtpRemoteAddr,
                     rtpRemotePort = rtpRemotePort.toInt(),
                     rtpSocket = rtpSocket,
@@ -1255,7 +1294,7 @@ a=sendrecv
                         val msg2 =
                             SipRequest(
                                 SipMethod.UPDATE,
-                                to,
+                                currentCall!!.remoteTarget ?: to,
                                 currentCall!!.callHeaders + ("content-type" to listOf("application/sdp")),
                                 newSdp
                             )

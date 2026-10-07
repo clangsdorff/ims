@@ -207,7 +207,8 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
 
             }, Bundle())
         }
-        sipHandler.onCancelledCall = { param: Object, s: String, map: Map<String, String> ->
+        sipHandler.onCancelledCall = cancelled@{ param: Object, s: String, map: Map<String, String> ->
+            if (outgoingState == State.TERMINATED) return@cancelled
             val statusCode = map["statusCode"]?.toInt() ?: -1
             val reason = when {
                 statusCode >= 400 -> ImsReasonInfo(sipStatusToReason(statusCode), statusCode, map["statusString"])
