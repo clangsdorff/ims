@@ -609,15 +609,8 @@ class SipHandler(val ctxt: Context) {
         // on failure just abort thread, ims will restart
         require(response.statusCode == 200)
 
-        val r =  Regex("lr;[^>]*")
-        val route =
-            (response.headers.getOrDefault("service-route", emptyList()) +
-                    response.headers.getOrDefault("path", emptyList()))
-                .toSet() // remove duplicates
-                .toList()
-                .map {
-                    r.replace(it, "lr")
-                }
+        // RFC 3608: preload Service-Route as is; Path is only meant for the registrar
+        val route = response.headers.getOrDefault("service-route", emptyList())
 
         val associatedUri =
             response.headers["p-associated-uri"]!!
