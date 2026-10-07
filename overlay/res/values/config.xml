@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-	<string name="config_ims_mmtel_package">me.phh.ims</string>
+	<string name="config_ims_mmtel_package">com.langsdorff.flossims</string>
 </resources>
