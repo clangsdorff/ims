@@ -156,6 +156,8 @@ class SipHandler(val ctxt: Context) {
         cbLock.withLock { responseCallbacks += (callId to cb) }
     }
 
+    private val incomingToTags = mutableMapOf<String, String>()
+
     fun parseMessage(reader: SipReader, writer: OutputStream): Boolean {
         val msg =
             try {
@@ -192,7 +194,7 @@ class SipHandler(val ctxt: Context) {
                 headersParam =
                     msg.headers.filter { (k, _) ->
                         k in listOf("cseq", "via", "from", "to", "call-id")
-                    }
+                    } + toWithTag(msg)
             )
         Rlog.d(TAG, "Replying back with $reply")
         synchronized(writer) { writer.write(reply.toByteArray()) }
@@ -1460,17 +1462,29 @@ a=sendrecv
 
     val prAckWaitLock = Object()
     var prAckWait = mutableSetOf<Int>()
+    private fun toWithTag(request: SipRequest): SipHeadersMap {
+        val tag = incomingToTags[request.headers["call-id"]?.get(0)] ?: return emptyMap()
+        val to = request.headers["to"]?.get(0) ?: return emptyMap()
+        if (to.contains(";tag=")) return emptyMap()
+        return mapOf("to" to listOf("$to;tag=$tag"))
+    }
+
     fun handleCall(request: SipRequest): Int {
         val contentType = request.headers["content-type"]?.get(0)
         if (contentType != "application/sdp") return 404
         callStopped.set(false)
         callStarted.set(false)
+        incomingToTags[request.headers["call-id"]!![0]] = randomBytes(6).toHex()
 
-        val f = request.headers["from"]
-        val r = Regex(".*(sip|tel):([^@]*).*")
-        val m = r.find(f!![0]!!)!!.groups[2]!!.value
-        Rlog.d(TAG, "Incoming call from $m")
-        onIncomingCall?.invoke(Object(), m, mapOf("call-id" to request.headers["call-id"]!![0]))
+        val identity = request.headers["p-asserted-identity"]?.firstOrNull() ?: request.headers["from"]!![0]
+        val r = Regex(".*(sip|tel):([^@;>]*).*")
+        val m = r.find(identity)!!.groups[2]!!.value
+        val privacy = request.headers["privacy"].orEmpty().any { it.contains("id") } ||
+            m.equals("anonymous", ignoreCase = true)
+        Rlog.d(TAG, "Incoming call from $m, privacy $privacy")
+        onIncomingCall?.invoke(Object(), m, mapOf(
+            "call-id" to request.headers["call-id"]!![0],
+            "privacy" to privacy.toString()))
 
         // We'll have three states:
         // - 100 Trying (this will be done by returning 100 in this function)
@@ -1535,6 +1549,15 @@ a=sendrecv
         }
 
         val hasEarlyMedia = request.headers["p-early-media"]?.isNotEmpty() == true
+        val remoteExtensions = (request.headers["supported"].orEmpty() + request.headers["require"].orEmpty())
+            .flatMap { it.split(",") }.map { it.trim() }
+        // RFC 3312: only require preconditions when the caller offered them
+        val usePrecondition = "precondition" in remoteExtensions && attributes.any { it.startsWith("curr:qos") }
+        Rlog.d(TAG, "Caller extensions $remoteExtensions, precondition $usePrecondition")
+        val qosLines = if (usePrecondition)
+            "a=curr:qos local none\na=curr:qos remote none\na=des:qos mandatory local sendrecv\n" +
+                "a=des:qos mandatory remote sendrecv\na=conf:qos remote sendrecv\n"
+        else ""
 
         // Look for an AMR/8000 mode
         // TODO: Select which one? SFR has two, one with mode-set=7 one without it. This would require reading the fmtp lines
@@ -1584,15 +1607,10 @@ a=maxptime:240
 a=$dtmfTrackDesc
 a=fmtp:$amrTrack mode-set=7;octet-align=0;max-red=0
 a=fmtp:$dtmfTrack 0-15
-a=curr:qos local none
-a=curr:qos remote none
-a=des:qos mandatory local sendrecv
-a=des:qos mandatory remote sendrecv
-a=conf:qos remote sendrecv
-a=sendrecv
+${qosLines}a=sendrecv
                        """.trim().toByteArray()
 
-            val myHeaders = commonHeaders + //Require: precondition
+            val myHeaders = commonHeaders +
                 """
                         Contact: $contactTel
                         Allow: INVITE, ACK, CANCEL, BYE, UPDATE, REFER, NOTIFY, INFO, MESSAGE, PRACK, OPTIONS
@@ -1600,7 +1618,8 @@ a=sendrecv
                         Require: 100rel, precondition
                         RSeq: $mySeqCounter
                         """.toSipHeadersMap() + accessNetworkInfo() +
-                            request.headers.filter { (k, _) -> k in listOf("cseq", "via", "from", "to", "call-id") } -
+                            request.headers.filter { (k, _) -> k in listOf("cseq", "via", "from", "to", "call-id", "record-route") } +
+                            toWithTag(request) -
                 "route" - "security-verify"
 
             currentCall = Call(
@@ -1675,10 +1694,10 @@ a=sendrecv
             }
 
 
-            synchronized(prAckWaitLock) {
+            if (usePrecondition) synchronized(prAckWaitLock) {
                 prAckWait += mySeqCounter
             }
-            if (hasEarlyMedia) {
+            if (usePrecondition) {
                 val msg =
                     SipResponse(
                         statusCode = 183,
@@ -1690,7 +1709,7 @@ a=sendrecv
                 synchronized(socket.gWriter()) { socket.gWriter().write(msg.toByteArray()) }
                 waitPrack(mySeqCounter)
             }
-            if (!hasEarlyMedia) {
+            if (!usePrecondition) {
                 val myHeaders2 = myHeaders - "rseq" - "content-type" - "require" +
                     """
 Supported: 100rel, replaces, timer
@@ -1707,9 +1726,6 @@ Supported: 100rel, replaces, timer
             }
         }
 
-        // Next step is 180 Ringing, handled in the thread
-        if (!hasEarlyMedia)
-            return 0
         return 100
     }
 
