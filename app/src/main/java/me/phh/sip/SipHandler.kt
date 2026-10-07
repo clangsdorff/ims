@@ -279,6 +279,9 @@ class SipHandler(val ctxt: Context) {
             InetAddress.getByName("2001:4c48:400:100::2") //,/2001:4c48:400::3:2
         }
 
+        commonHeaders -= "security-verify"
+        registerHeaders -= "security-verify"
+
         localAddr = lp.linkAddresses.map { it.address }.sortedBy { if(it is Inet6Address) 0 else 1 }.first()
         pcscfAddr = pcscf
 
