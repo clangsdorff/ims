@@ -1073,7 +1073,8 @@ a=sendrecv
             )
         } else null
         outgoingInvite = null
-        if (msg != null) {
+        // ImsCallSessionImplBase calls terminate() on the main thread
+        if (msg != null) thread {
             Rlog.d(TAG, "Sending $msg")
             synchronized(socket.gWriter()) { socket.gWriter().write(msg.toByteArray()) }
         }
