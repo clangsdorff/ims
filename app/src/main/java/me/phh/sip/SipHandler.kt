@@ -219,6 +219,26 @@ class SipHandler(val ctxt: Context) {
         return true
     }
 
+    private var reconnectDelayMs = 5_000L
+    private fun reconnect() {
+        imsReady = false
+        imsFailureCallback?.invoke()
+        runCatching { serverSocket.serverSocket.close() }
+        runCatching { serverSocketUdp.socket.close() }
+        thread {
+            Rlog.d(TAG, "Reconnecting in $reconnectDelayMs ms")
+            Thread.sleep(reconnectDelayMs)
+            try {
+                connect()
+                reconnectDelayMs = 5_000L
+            } catch (t: Throwable) {
+                Rlog.w(TAG, "Reconnect failed", t)
+                reconnectDelayMs = minOf(reconnectDelayMs * 2, 120_000L)
+                reconnect()
+            }
+        }
+    }
+
     var abandonnedBecauseOfNoPcscf = false
     fun connect() {
         abandonnedBecauseOfNoPcscf = false
@@ -402,16 +422,14 @@ class SipHandler(val ctxt: Context) {
         // start both in threads as we're only called here from network
         // callback from which it's better to return
         CoroutineScope(Dispatchers.IO).launch {
-            // XXX catch and reconnect on 'java.net.SocketException: Software caused connection
-            // abort' ?
             try {
-                while (true) {
-                    parseMessage(socket.gReader(), socket.gWriter())
-                }
+                while (parseMessage(socket.gReader(), socket.gWriter())) { }
+                Rlog.w(TAG, "Main/control socket closed by peer")
             } catch(t: Throwable) {
                 Rlog.d(TAG, "Got exception in main/control socket", t)
             }
             socket.close()
+            reconnect()
         }
         CoroutineScope(Dispatchers.IO).launch {
             try {
