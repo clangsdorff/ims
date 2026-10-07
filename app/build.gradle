@@ -40,6 +40,16 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
+    // systemuid: /data install on ROMs that trust the signature for android.uid.system; privapp: /system/priv-app (su module)
+    flavorDimensions 'install'
+    productFlavors {
+        systemuid {
+            dimension 'install'
+        }
+        privapp {
+            dimension 'install'
+        }
+    }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
