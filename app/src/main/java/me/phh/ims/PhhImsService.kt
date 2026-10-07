@@ -35,7 +35,7 @@ class PhhImsService : ImsService() {
     }
     fun armPeriodicRegisterAlarm() {
         val alarmManager = this.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val intent = Intent(receiver.ALARM_PERIODIC_REGISTER)
+        val intent = Intent(receiver.ALARM_PERIODIC_REGISTER).setPackage(packageName)
         val pendingIntent =
             PendingIntent.getBroadcast(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
         // We want recurring 3000s but recurring alarms don't wake up from
