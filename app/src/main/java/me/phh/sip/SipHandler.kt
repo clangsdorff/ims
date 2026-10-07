@@ -21,7 +21,6 @@ import android.telephony.imsmedia.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import me.phh.ims.Rnnoise
 import java.io.*
 import java.net.*
 import java.util.concurrent.Executor
@@ -885,8 +884,6 @@ a=sendrecv
                 sequenceNumber++
             }
 
-            val rnnNoise = Rnnoise()
-
             // DANGER: Don't open the mic before the user acknowledged opening the call!
 
             val minBufferSize = AudioRecord.getMinBufferSize(8000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
@@ -896,19 +893,18 @@ a=sendrecv
 
             var firstPacket = true
 
-            val bufferSize = ((minBufferSize + (rnnNoise.getFrameSize() - 1 )) / rnnNoise.getFrameSize()).toInt() * rnnNoise.getFrameSize()
+            // Whole 20 ms AMR frames of 160 samples
+            val frameBytes = 320
+            val bufferSize = (minBufferSize + frameBytes - 1) / frameBytes * frameBytes
             val buffer = ByteArray(bufferSize)
-            val bufferPostRnnoise = ByteArray(bufferSize)
             while (true) {
                 if (callStopped.get()) break
                 val nRead = audioRecord.read(buffer,0, buffer.size)
-                // Convert buffer from ByteArray to ShortArray
-                rnnNoise.processFrame(buffer, bufferPostRnnoise)
 
                 val inBufIdx = encoder.dequeueInputBuffer(-1)
                 val inBuf = encoder.getInputBuffer(inBufIdx)!!
                 inBuf.clear()
-                inBuf.put(bufferPostRnnoise, 0, nRead)
+                inBuf.put(buffer, 0, nRead)
 
                 // Fake timestamp but it is not appearing in the output stream anyway
                 encoder.queueInputBuffer(inBufIdx, 0, nRead, System.nanoTime() / 1000, 0)
