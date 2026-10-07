@@ -334,8 +334,9 @@ class SipHandler(val ctxt: Context) {
 
         Rlog.d(TAG, "Requesting AKA challenge")
         val akaResult = sipAkaChallenge(telephonyManager, nonceB64)
+        val offersQopAuth = wwwAuthenticateParams["qop"]?.split(",")?.any { it.trim().trim('"') == "auth" } == true
         akaDigest =
-            if(requireNonsessAka)
+            if(requireNonsessAka || !offersQopAuth)
                 SipAkaDigest(
                     user = user,
                     realm = realm,
