@@ -7,6 +7,7 @@ import android.media.*
 import android.net.*
 import android.os.Handler
 import android.os.HandlerThread
+import android.telephony.CellInfo
 import android.telephony.CellInfoGsm
 import android.telephony.CellInfoLte
 import android.telephony.CellInfoNr
@@ -538,6 +539,20 @@ class SipHandler(val ctxt: Context) {
     }
 
     @SuppressLint("MissingPermission")
+    private fun accessNetworkInfo(): SipHeadersMap {
+        val id = telephonyManager.allCellInfo
+            .filterIsInstance<CellInfoLte>()
+            .firstOrNull { it.isRegistered }
+            ?.cellIdentity ?: return emptyMap()
+        val plmn = (id.mccString ?: return emptyMap()) + (id.mncString ?: return emptyMap())
+        if (id.tac == CellInfo.UNAVAILABLE || id.ci == CellInfo.UNAVAILABLE) return emptyMap()
+        // TS 36.101: EARFCN 36000-65535 belong to TDD bands
+        val access = if (id.earfcn in 36000..65535) "3GPP-E-UTRAN-TDD" else "3GPP-E-UTRAN-FDD"
+        val cellId = "%s%04x%07x".format(plmn, id.tac, id.ci)
+        return mapOf("p-access-network-info" to listOf("$access;utran-cell-id-3gpp=$cellId"))
+    }
+
+    @SuppressLint("MissingPermission")
     fun register(_writer: OutputStream? = null) {
         val tm = ctxt.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
 
@@ -580,7 +595,6 @@ class SipHandler(val ctxt: Context) {
         val secClientLine =
             "Security-Client: ${secClients.joinToString(", ")}"
 
-                    //P-Access-Network-Info: 3GPP-E-UTRAN-FDD;utran-cell-id-3gpp=216302ee2003a107
         val msg =
             SipRequest(
                 SipMethod.REGISTER,
@@ -597,7 +611,7 @@ class SipHandler(val ctxt: Context) {
                     Require: sec-agree
                     Proxy-Require: sec-agree
                     $secClientLine
-                    """.toSipHeadersMap()
+                    """.toSipHeadersMap() + accessNetworkInfo()
             ) // route present on all calls except this
         Rlog.d(TAG, "Sending $msg")
         synchronized(writer) { writer.write(msg.toByteArray()) }
@@ -657,8 +671,7 @@ class SipHandler(val ctxt: Context) {
                     Proxy-Require: sec-agree
                     Allow: INVITE, ACK, CANCEL, BYE, UPDATE, REFER, NOTIFY, INFO, MESSAGE, PRACK, OPTIONS
                     Accept: application/reginfo+xml
-                    P-Access-Network-Info: 3GPP-E-UTRAN-FDD;utran-cell-id-3gpp=20810b8c49752501
-                    """.toSipHeadersMap()
+                    """.toSipHeadersMap() + accessNetworkInfo()
             )
         if (!imsReady) {
             setResponseCallback(msg.headers["call-id"]!![0], ::subscribeCallback)
@@ -1105,7 +1118,7 @@ a=sendrecv
                     Accept-Contact: *;+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel"
                     P-Preferred-Service: urn:urn-7:3gpp-service.ims.icsi.mmtel
                     Contact: $contactTel
-                    """.toSipHeadersMap() + generateCallId() - "p-asserted-identity"
+                    """.toSipHeadersMap() + generateCallId() + accessNetworkInfo() - "p-asserted-identity"
             // P-Preferred-Service: urn:urn-7:3gpp-service.ims.icsi.mmtel
             // Accept-Contact: *;+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel"
             val msg =
@@ -1519,8 +1532,7 @@ a=sendrecv
                         Content-Type: application/sdp
                         Require: 100rel, precondition
                         RSeq: $mySeqCounter
-                        P-Access-Network-Info: 3GPP-E-UTRAN-FDD;utran-cell-id-3gpp=20810b8c49752501
-                        """.toSipHeadersMap() +
+                        """.toSipHeadersMap() + accessNetworkInfo() +
                             request.headers.filter { (k, _) -> k in listOf("cseq", "via", "from", "to", "call-id") } -
                 "route" - "security-verify"
 
@@ -1615,7 +1627,6 @@ a=sendrecv
                 val myHeaders2 = myHeaders - "rseq" - "content-type" - "require" +
                     """
 Supported: 100rel, replaces, timer
-P-Access-Network-Info: 3GPP-E-UTRAN-FDD;utran-cell-id-3gpp=4500620f331a5e06
 
 """.toSipHeadersMap()
                 val msg2 =
