@@ -779,7 +779,7 @@ a=curr:qos remote sendrecv
 a=des:qos mandatory local sendrecv
 a=des:qos mandatory remote sendrecv
 a=sendrecv
-                       """.trim().toByteArray()
+                       """.trim().sdpLines()
 
         currentCall = Call(
             outgoing =  call.outgoing,
@@ -1184,7 +1184,7 @@ a=curr:qos remote none
 a=des:qos optional local sendrecv
 a=des:qos optional remote sendrecv
 a=sendrecv
-                       """.trim().toByteArray()
+                       """.trim().sdpLines()
 
             val to = "tel:$phoneNumber;phone-context=ims.mnc$mnc.mcc$mcc.3gppnetwork.org"
             val sipInstance = "<urn:gsma:imei:${imei.substring(0, 8)}-${imei.substring(8, 14)}-0>"
@@ -1652,7 +1652,7 @@ a=$dtmfTrackDesc
 a=fmtp:$amrTrack mode-set=7;octet-align=0;max-red=0
 a=fmtp:$dtmfTrack 0-15
 ${qosLines}a=sendrecv
-                       """.trim().toByteArray()
+                       """.trim().sdpLines()
 
             val myHeaders = commonHeaders +
                 """

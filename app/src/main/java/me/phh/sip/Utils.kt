@@ -18,3 +18,6 @@ fun String.hexToByteArray(): ByteArray {
 }
 
 fun randomBytes(count: Int): ByteArray = Random.Default.nextBytes(count)
+
+// rfc4566 wants CRLF line ends; Personal AR (722-34) answers 400 "SDP is illegal" to bare LF
+fun String.sdpLines(): ByteArray = lines().joinToString("\r\n", postfix = "\r\n").toByteArray()
