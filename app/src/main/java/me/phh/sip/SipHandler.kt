@@ -1492,7 +1492,7 @@ a=sendrecv
                 """<sip:$myTel@$local;transport=tcp>;expires=600000;+sip.instance="$sipInstance";+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel";+g.3gpp.smsip;audio"""
             val mySeqCounter = reliableSequenceCounter++
             val ipType = if(socket.gLocalAddr() is Inet6Address) "IP6" else "IP4"
-            val mySdp = ("""
+            val mySdp = """
 v=0
 o=$owner 1 2 IN $ipType ${socket.gLocalAddr().hostAddress}
 s=phh voice call
