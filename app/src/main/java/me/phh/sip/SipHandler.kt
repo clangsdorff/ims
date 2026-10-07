@@ -1408,9 +1408,20 @@ a=sendrecv
         }
     }
 
-    fun callDecodeThread() {
+    fun callDecodeThread(waitForAnswer: Boolean = false) {
         // Receiving thread
         thread {
+            // A voice call track while ringing makes the HAL move the ringtone to the earpiece
+            if (waitForAnswer) {
+                val rtpSocket = currentCall!!.rtpSocket
+                val drop = DatagramPacket(ByteArray(2048), 2048)
+                rtpSocket.soTimeout = 20
+                while (!callStarted.get() && !callStopped.get()) {
+                    try { rtpSocket.receive(drop) } catch (e: SocketTimeoutException) { }
+                }
+                rtpSocket.soTimeout = 0
+                if (callStopped.get()) return@thread
+            }
             val minBufferSize = AudioTrack.getMinBufferSize(8000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
             val audioTrack = AudioTrack(AudioManager.STREAM_VOICE_CALL, 8000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT, minBufferSize, AudioTrack.MODE_STREAM)
             audioTrack.play()
@@ -1718,7 +1729,7 @@ ${qosLines}a=sendrecv
                     }
                 )
             } else {
-                callDecodeThread()
+                callDecodeThread(waitForAnswer = true)
                 callEncodeThread()
             }
 
