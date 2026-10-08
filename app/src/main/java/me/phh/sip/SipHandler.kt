@@ -458,9 +458,14 @@ class SipHandler(val ctxt: Context) {
                     val client = serverSocket.serverSocket.accept()
                     // there can only be a single client at a time because
                     // both source and destination ports are fixed
-                    val reader = client.getInputStream().sipReader()
-                    val writer = client.getOutputStream()
-                    while (parseMessage(reader, writer)) { }
+                    // Personal AR resets this connection between calls; stopping here lost every later BYE
+                    try {
+                        val reader = client.getInputStream().sipReader()
+                        val writer = client.getOutputStream()
+                        while (parseMessage(reader, writer)) { }
+                    } catch (e: IOException) {
+                        Rlog.d(TAG, "TCP server client dropped", e)
+                    }
                     client.close()
                 }
             } catch(t: Throwable) {
