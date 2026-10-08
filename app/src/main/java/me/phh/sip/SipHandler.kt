@@ -1497,20 +1497,26 @@ a=sendrecv
                 }
                 //Rlog.d(TAG, "Received RTP data of length ${dgram.length} $m")
 
-                val inBufIndex = decoder.dequeueInputBuffer(-1)
+                // Outputs left in the codec stop it from taking input, so never wait forever for an input buffer
+                val inBufIndex = decoder.dequeueInputBuffer(20_000)
                 //Rlog.d(TAG, "Got decoding input buffer $inBufIndex")
-                val inBuf = decoder.getInputBuffer(inBufIndex)!!
-                val data = baOs.toByteArray()
-                inBuf.clear()
-                inBuf.put(data)
-                decoder.queueInputBuffer(inBufIndex, 0, data.size, 0, 0)
+                if (inBufIndex >= 0) {
+                    val inBuf = decoder.getInputBuffer(inBufIndex)!!
+                    val data = baOs.toByteArray()
+                    inBuf.clear()
+                    inBuf.put(data)
+                    decoder.queueInputBuffer(inBufIndex, 0, data.size, 0, 0)
+                } else {
+                    Rlog.w(TAG, "No decoder input buffer, dropping RTP packet")
+                }
 
                 //TODO: Support DTX (comfort noise frames that don't repeat)
-                //TODO: Can we receive multiple outs per in?
                 val outBufInfo = MediaCodec.BufferInfo()
-                val outBufIndex = decoder.dequeueOutputBuffer(outBufInfo, 0)
-                //Rlog.d(TAG, "Got decoding output buffer $outBufIndex")
-                if (outBufIndex >= 0) {
+                while (true) {
+                    val outBufIndex = decoder.dequeueOutputBuffer(outBufInfo, 0)
+                    //Rlog.d(TAG, "Got decoding output buffer $outBufIndex")
+                    if (outBufIndex == MediaCodec.INFO_TRY_AGAIN_LATER) break
+                    if (outBufIndex < 0) continue
                     val outBuf = decoder.getOutputBuffer(outBufIndex)!!
                     audioTrack.write(outBuf, outBufInfo.size, AudioTrack.WRITE_BLOCKING)
                     decoder.releaseOutputBuffer(outBufIndex, false)
