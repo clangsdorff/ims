@@ -1465,8 +1465,9 @@ a=sendrecv
 
             while(true) {
                 if(callStopped.get()) break
-                val dgramBuf = ByteArray(2048)
-                val dgram = DatagramPacket(dgramBuf, dgramBuf.size)
+                val dgramBuf = ByteArray(2049)
+                // spare zero byte: the AMR repacking below reads one byte past the datagram
+                val dgram = DatagramPacket(dgramBuf, dgramBuf.size - 1)
                 currentCall!!.rtpSocket.receive(dgram)
 
                 // Check RTP payload type
