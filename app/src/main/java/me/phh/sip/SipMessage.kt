@@ -269,6 +269,7 @@ fun sipHeaderOf(line: String): Pair<String, List<SipHeader>>? {
             "from",
             "p-asserted-identity",
             "security-client",
+            "security-server",
             "security-verify",
             "supported",
             "to" -> splitComma.findAll(valueRaw).toList().map { it.groupValues[0].trim() }
