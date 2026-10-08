@@ -207,6 +207,15 @@ class SipMessageTests {
     }
 
     @Test
+    fun `check security-server options splitting`() {
+        val (header, values) =
+            sipHeaderOf("Security-Server: ipsec-3gpp;q=0.1;alg=hmac-md5-96;port-s=7777, ipsec-3gpp;q=0.5;alg=hmac-sha-1-96;port-s=7778")!!
+        require(header == "security-server")
+        require(values.size == 2)
+        require(values[1].getParams().component2()["port-s"] == "7778")
+    }
+
+    @Test
     fun `check serialization regroups allow`() {
         val headers =
             """
