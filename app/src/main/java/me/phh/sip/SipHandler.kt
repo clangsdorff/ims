@@ -41,6 +41,7 @@ private data class smsHeaders(
 class SipHandler(val ctxt: Context) {
     companion object {
         private const val TAG = "PHH SipHandler"
+        const val REGISTER_REPLY_TIMEOUT_MS = 30_000L
     }
 
     val myHandler = Handler(HandlerThread("PhhMmTelFeature").apply { start() }.looper)
@@ -633,6 +634,7 @@ class SipHandler(val ctxt: Context) {
         // XXX timeout/retry? notification on fail? receive on thread?
 
         val writer = _writer ?: socket.gWriter()
+        if (_writer == null) armRegisterWatchdog()
 
         fun secClient(alg: String, ealg: String) =
             "ipsec-3gpp;prot=esp;mod=trans;spi-c=${ipsecSettings.clientSpiC.spi};spi-s=${ipsecSettings.clientSpiS.spi};port-c=${socket.gLocalPort()};port-s=${serverSocket.localPort};ealg=${ealg};alg=${alg}"
@@ -666,7 +668,28 @@ class SipHandler(val ctxt: Context) {
         registerCounter += 1
     }
 
+    // A refresh written into a silently dead TCP connection never gets an answer, and calls go nowhere
+    private var registerWatchdog: Runnable? = null
+    private fun armRegisterWatchdog() {
+        val watched = socket
+        val r = Runnable {
+            Rlog.w(TAG, "No reply to REGISTER, reconnecting")
+            runCatching { watched.close() }
+        }
+        synchronized(myHandler) {
+            registerWatchdog?.let(myHandler::removeCallbacks)
+            registerWatchdog = r
+        }
+        myHandler.postDelayed(r, REGISTER_REPLY_TIMEOUT_MS)
+    }
+
+    private fun disarmRegisterWatchdog() = synchronized(myHandler) {
+        registerWatchdog?.let(myHandler::removeCallbacks)
+        registerWatchdog = null
+    }
+
     fun registerCallback(response: SipResponse): Boolean {
+        disarmRegisterWatchdog()
         // once we get there all register must be successful
         // on failure just abort thread, ims will restart
         require(response.statusCode == 200)
