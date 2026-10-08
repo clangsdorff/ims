@@ -1271,7 +1271,7 @@ a=sendrecv
                     Rlog.d(TAG, "Invite got SUCCESS")
                 } else {
                     Rlog.d(TAG, "Invite got status ${resp.statusCode} = ${resp.statusString}")
-                    if(resp.statusCode >= 400) {
+                    if(resp.statusCode >= 300) {
                         onCancelledCall?.invoke(Object(), "",
                             mapOf(
                                 "statusCode" to resp.statusCode.toString(),

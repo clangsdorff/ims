@@ -217,12 +217,12 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
             if (outgoingState == State.TERMINATED) return@cancelled
             val statusCode = map["statusCode"]?.toInt() ?: -1
             val reason = when {
-                statusCode >= 400 -> ImsReasonInfo(sipStatusToReason(statusCode), statusCode, map["statusString"])
+                statusCode >= 300 -> ImsReasonInfo(sipStatusToReason(statusCode), statusCode, map["statusString"])
                 map["local"] != null -> ImsReasonInfo(ImsReasonInfo.CODE_USER_TERMINATED, 0, null)
                 else -> ImsReasonInfo(ImsReasonInfo.CODE_USER_TERMINATED_BY_REMOTE, 0, null)
             }
             Rlog.d(TAG, "Call ended in outgoing state ${State.toString(outgoingState)}: $reason")
-            if (outgoingState == State.INITIATED && statusCode >= 400) {
+            if (outgoingState == State.INITIATED && statusCode >= 300) {
                 callListener?.callSessionInitiatingFailed(reason)
             } else {
                 callListener?.callSessionTerminated(reason)
@@ -244,6 +244,7 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
     }
 
     private fun sipStatusToReason(statusCode: Int): Int = when (statusCode) {
+        380 -> ImsReasonInfo.CODE_LOCAL_CALL_CS_RETRY_REQUIRED
         400 -> ImsReasonInfo.CODE_SIP_BAD_REQUEST
         403 -> ImsReasonInfo.CODE_SIP_FORBIDDEN
         404 -> ImsReasonInfo.CODE_SIP_NOT_FOUND
