@@ -9,10 +9,13 @@ import android.content.IntentFilter
 import android.os.Binder
 import android.os.SystemClock
 import android.telephony.Rlog
+import android.telephony.TelephonyManager
 import android.telephony.ims.ImsService
+import android.telephony.ims.feature.ImsFeature
 import android.telephony.ims.feature.MmTelFeature
 import android.telephony.ims.feature.RcsFeature
 import android.telephony.ims.stub.ImsConfigImplBase
+import android.telephony.ims.stub.ImsFeatureConfiguration
 import android.telephony.ims.stub.ImsRegistrationImplBase
 import android.telephony.imsmedia.ImsMediaManager
 
@@ -46,6 +49,16 @@ class PhhImsService : ImsService() {
             pendingIntent
         )
         Rlog.d(TAG, "Alarm set")
+    }
+
+    // ImsResolver reads the manifest features only if we were the device ImsService when it scanned, otherwise it asks here
+    override fun querySupportedImsFeatures(): ImsFeatureConfiguration {
+        val builder = ImsFeatureConfiguration.Builder()
+        for (slot in 0 until getSystemService(TelephonyManager::class.java).activeModemCount) {
+            builder.addFeature(slot, ImsFeature.FEATURE_EMERGENCY_MMTEL)
+            builder.addFeature(slot, ImsFeature.FEATURE_MMTEL)
+        }
+        return builder.build()
     }
 
     // XXX one per slot id...
