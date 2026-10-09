@@ -1,6 +1,6 @@
 id=langsdorff_flossims
 name=Floss IMS (langsdorff)
-version=v52
-versionCode=52
+version=v53
+versionCode=53
 author=Langsdorff
 description=VoLTE through Floss IMS as a privileged system app, for GSIs without a working vendor IMS
