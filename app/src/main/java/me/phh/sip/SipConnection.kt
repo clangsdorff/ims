@@ -63,11 +63,32 @@ class SipConnectionTcp(
     init {
         socket = network.socketFactory.createSocket()
         if (_localAddr != null) {
+            if (_localPort != 0) socket.reuseAddress = true
             socket.bind(InetSocketAddress(_localAddr, _localPort))
         }
         localAddr = socket.localAddress
         localPort = socket.localPort
     }
+
+    // Same protected port and SAs, after the P-CSCF closed an idle connection
+    fun reopen(ipSecManager: IpSecManager): SipConnectionTcp {
+        val c = SipConnectionTcp(network, remoteAddr, localAddr, localPort)
+        try {
+            if (this::inTransform.isInitialized) {
+                c.inTransform = inTransform
+                c.outTransform = outTransform
+                ipSecManager.applyTransportModeTransform(c.socket, IpSecManager.DIRECTION_IN, inTransform)
+                ipSecManager.applyTransportModeTransform(c.socket, IpSecManager.DIRECTION_OUT, outTransform)
+            }
+            c.connect(remotePort)
+        } catch (e: Exception) {
+            c.close()
+            throw e
+        }
+        return c
+    }
+
+    fun isClosed(): Boolean = socket.isClosed
 
     override fun connect(_remotePort: Int) {
         remotePort = _remotePort
