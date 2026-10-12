@@ -294,6 +294,7 @@ class SipHandler(val ctxt: Context, val slotId: Int) {
         481 -> "Call/Transaction Does Not Exist"
         486 -> "Busy Here"
         488 -> "Not Acceptable Here"
+        491 -> "Request Pending"
         500 -> "Server Internal Error"
         else -> "ERROR"
     }
@@ -589,6 +590,7 @@ class SipHandler(val ctxt: Context, val slotId: Int) {
         setRequestCallback(SipMethod.CANCEL, ::handleCancel)
         setRequestCallback(SipMethod.BYE, ::handleCancel)
         setRequestCallback(SipMethod.UPDATE, ::handleUpdate)
+        setRequestCallback(SipMethod.ACK) { 0 }
         handleResponse(regReply)
 
         // two ways we'll get incoming messages:
@@ -1228,27 +1230,27 @@ a=sendrecv
         }
     }
 
+    private fun dialogContact(): String {
+        val local =
+            if(socket.gLocalAddr() is Inet6Address)
+                "[${socket.gLocalAddr().hostAddress}]:${serverSocket.localPort}"
+            else
+                "${socket.gLocalAddr().hostAddress}:${serverSocket.localPort}"
+        val sipInstance = "<urn:gsma:imei:${imei.substring(0, 8)}-${imei.substring(8, 14)}-0>"
+        val transport = if (socket is SipConnectionTcp) "tcp" else "udp"
+        return """<sip:$imsi@$local;transport=$transport>;expires=600000;+sip.instance="$sipInstance";+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel";+g.3gpp.smsip;+g.3gpp.mid-call;+g.3gpp.srvcc-alerting;+g.3gpp.ps2cs-srvcc-orig-pre-alerting"""
+    }
+
     var currentCall: Call? = null
     fun acceptCall() {
         worker("accept-call", ::dropCall) {
-
-            val local =
-                if(socket.gLocalAddr() is Inet6Address)
-                    "[${socket.gLocalAddr().hostAddress}]:${serverSocket.localPort}"
-                else
-                    "${socket.gLocalAddr().hostAddress}:${serverSocket.localPort}"
-            val sipInstance = "<urn:gsma:imei:${imei.substring(0, 8)}-${imei.substring(8, 14)}-0>"
-            val transport = if (socket is SipConnectionTcp) "tcp" else "udp"
-            val evolvedContact =
-                """<sip:$imsi@$local;transport=$transport>;expires=600000;+sip.instance="$sipInstance";+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel";+g.3gpp.smsip;+g.3gpp.mid-call;+g.3gpp.srvcc-alerting;+g.3gpp.ps2cs-srvcc-orig-pre-alerting"""
-
             Rlog.d(TAG, "Accepting call")
             val call = currentCall!!
             val myHeaders = call.callHeaders
             val myHeaders3 = myHeaders - "rseq" - "security-verify" + """
                 Session-Expires: 900;refresher=uas
                 P-Preferred-Identity: <$mySip>
-                Contact: $evolvedContact
+                Contact: ${dialogContact()}
                 Content-Type: application/sdp
                 """.toSipHeadersMap()
 
@@ -1776,14 +1778,83 @@ a=sendrecv
         return mapOf("to" to listOf("$to;tag=$tag"))
     }
 
+    private fun audioAnswerSdp(owner: String, port: Int, amrTrack: Int, amrTrackDesc: String,
+                               dtmfTrack: Int, dtmfTrackDesc: String, qosLines: String = ""): ByteArray {
+        val ipType = if(socket.gLocalAddr() is Inet6Address) "IP6" else "IP4"
+        val allTracks = listOf(amrTrack, dtmfTrack).sorted()
+        return """
+v=0
+o=$owner 1 2 IN $ipType ${socket.gLocalAddr().hostAddress}
+s=phh voice call
+c=IN $ipType ${socket.gLocalAddr().hostAddress}
+b=AS:38
+b=RS:0
+b=RR:0
+t=0 0
+m=audio $port RTP/AVP ${allTracks.joinToString(" ")}
+b=AS:38
+b=RS:0
+b=RR:0
+a=$amrTrackDesc
+a=ptime:20
+a=maxptime:240
+a=$dtmfTrackDesc
+a=fmtp:$amrTrack mode-set=7;octet-align=0;max-red=0
+a=fmtp:$dtmfTrack 0-15
+${qosLines}a=sendrecv
+                       """.trim().sdpLines()
+    }
+
+    // Answers an in-dialog INVITE (session refresh or codec re-offer) with the media already in use
+    private fun handleReinvite(request: SipRequest): Int {
+        val call = currentCall
+        val to = request.headers["to"]?.firstOrNull()
+        if (call == null || to == null || !to.contains(";tag=")) {
+            Rlog.w(TAG, "INVITE for call $activeCallId before the dialog is set up")
+            return 491
+        }
+        val sdp = request.body.toString(Charsets.UTF_8).split("[\r\n]+".toRegex())
+        val offered = sdp.firstOrNull { it.startsWith("m=audio ") }?.split(" ")?.drop(3).orEmpty()
+        if (call.amrTrack.toString() !in offered || call.dtmfTrack.toString() !in offered) {
+            Rlog.w(TAG, "Re-INVITE no longer offers tracks ${call.amrTrack}/${call.dtmfTrack}: $offered")
+            return 488
+        }
+        val remotePort = sdp.firstOrNull { it.startsWith("m=audio ") }?.split(" ")?.get(1)?.toIntOrNull()
+        val remoteAddr = sdp.firstOrNull { it.startsWith("c=") }?.split(" ")?.getOrNull(2)
+            ?.let { runCatching { InetAddress.getByName(it) }.getOrNull() }
+        if (remotePort != call.rtpRemotePort || remoteAddr != call.rtpRemoteAddr)
+            Rlog.w(TAG, "Re-INVITE moves remote media to $remoteAddr:$remotePort, keeping ${call.rtpRemoteAddr}:${call.rtpRemotePort}")
+        Rlog.d(TAG, "Answering re-INVITE for $activeCallId with the current media")
+
+        val owner = if (call.outgoing) "-" else request.destination.substringAfter("sip:").substringBefore("@")
+        val sessionExpires = request.headers["session-expires"]?.firstOrNull()
+        var headers = request.headers.filter { (k, _) -> k in listOf("cseq", "via", "from", "to", "call-id") } + """
+            Contact: ${dialogContact()}
+            Content-Type: application/sdp
+            Supported: 100rel, replaces, timer
+            """.toSipHeadersMap()
+        if (sessionExpires != null) {
+            headers = headers + ("session-expires" to listOf(sessionExpires))
+            if (sessionExpires.contains("refresher=uac")) headers = headers + ("require" to listOf("timer"))
+        }
+        val reply = SipResponse(
+            statusCode = 200,
+            statusString = "OK",
+            headersParam = headers,
+            body = audioAnswerSdp(owner, call.rtpSocket.localPort, call.amrTrack, call.amrTrackDesc, call.dtmfTrack, call.dtmfTrackDesc)
+        )
+        send(reply)
+        return 0
+    }
+
     fun handleCall(request: SipRequest): Int {
         val contentType = request.headers["content-type"]?.get(0)
         if (contentType != "application/sdp") return 404
         val callId = request.headers["call-id"]?.firstOrNull() ?: return 400
         if (activeCallId != null) {
-            // Re-INVITEs refreshing the current session are not supported yet
+            if (callId == activeCallId) return handleReinvite(request)
             Rlog.w(TAG, "INVITE $callId while call $activeCallId is active")
-            return if (callId == activeCallId) 488 else 486
+            return 486
         }
 
         val identity = request.headers["p-asserted-identity"]?.firstOrNull() ?: request.headers["from"]!![0]
@@ -1875,7 +1946,6 @@ a=sendrecv
         // Look for a DTMF track, use the 8000Hz-based one to match AMR timestamps
         val (dtmfTrack, dtmfTrackDesc) = lookTrackMatching("telephone-event/8000") ?: return 488
 
-        val allTracks = listOf(amrTrack, dtmfTrack).sorted()
         // destination is sip:<owner>@realm, extract owner
         val owner = request.destination.substringAfter("sip:").substringBefore("@")
 
@@ -1905,28 +1975,7 @@ a=sendrecv
             val contactTel =
                 """<sip:$myTel@$local;transport=tcp>;expires=600000;+sip.instance="$sipInstance";+g.3gpp.icsi-ref="urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel";+g.3gpp.smsip;audio"""
             val mySeqCounter = reliableSequenceCounter++
-            val ipType = if(socket.gLocalAddr() is Inet6Address) "IP6" else "IP4"
-            val mySdp = """
-v=0
-o=$owner 1 2 IN $ipType ${socket.gLocalAddr().hostAddress}
-s=phh voice call
-c=IN $ipType ${socket.gLocalAddr().hostAddress}
-b=AS:38
-b=RS:0
-b=RR:0
-t=0 0
-m=audio ${rtpSocket.localPort} RTP/AVP ${allTracks.joinToString(" ")}
-b=AS:38
-b=RS:0
-b=RR:0
-a=$amrTrackDesc
-a=ptime:20
-a=maxptime:240
-a=$dtmfTrackDesc
-a=fmtp:$amrTrack mode-set=7;octet-align=0;max-red=0
-a=fmtp:$dtmfTrack 0-15
-${qosLines}a=sendrecv
-                       """.trim().sdpLines()
+            val mySdp = audioAnswerSdp(owner, rtpSocket.localPort, amrTrack, amrTrackDesc, dtmfTrack, dtmfTrackDesc, qosLines)
 
             val myHeaders = commonHeaders +
                 """
