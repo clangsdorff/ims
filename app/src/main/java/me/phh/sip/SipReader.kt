@@ -86,6 +86,18 @@ class SipReader(private val input: InputStream) : BufferedInputStream(input) {
         return String(line, Charsets.US_ASCII)
     }
 
+    // RFC 5626 keepalive pongs and RFC 3261 7.5 stray CRLFs come before a start line
+    fun skipEmptyLines() {
+        while (true) {
+            mark(1)
+            val c = read()
+            if (c != '\r'.code && c != '\n'.code) {
+                reset()
+                return
+            }
+        }
+    }
+
     fun readNBytes2(len: Int): ByteArray {
         // similar to inputStream readNBytes, loop if required
         // but abort if we did not read full

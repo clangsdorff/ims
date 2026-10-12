@@ -335,6 +335,7 @@ fun String.toSipHeadersMap(): SipHeadersMap = parseHeaders(this.lines().asSequen
 fun SipReader.parseHeaders(): SipHeadersMap = parseHeaders(this.lineSequence())
 
 fun SipReader.parseMessage(): SipMessage? {
+    skipEmptyLines()
     val firstLine = this.readLine() ?: return null
     val headers = this.parseHeaders()
     val body =

@@ -153,10 +153,20 @@ class SipMessageTests {
         val reader = (keepaliveMessage + messageRequest).inputStream().sipReader()
 
         val message = reader.parseMessage()
-        require(message == null)
+        require(message is SipRequest)
 
         val message2 = reader.parseMessage()
-        require(message2 is SipRequest)
+        require(message2 == null)
+    }
+
+    @Test
+    fun `skip keepalive pongs between messages`() {
+        val reader = (messageRequest + keepaliveMessage + keepaliveMessage + okResponse).inputStream().sipReader()
+
+        require(reader.parseMessage() is SipRequest)
+        val message = reader.parseMessage()
+        require(message is SipResponse)
+        require(message.statusCode == 200)
     }
 
     @Test
