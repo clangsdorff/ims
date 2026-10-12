@@ -4,6 +4,7 @@ package me.phh.ims
 import android.os.Bundle
 import android.os.Message
 import android.telephony.Rlog
+import android.telephony.SubscriptionManager
 import android.telephony.ims.ImsCallProfile
 import android.telephony.ims.ImsCallSessionListener
 import android.telephony.ims.ImsReasonInfo
@@ -31,7 +32,14 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
     }
 
     val imsSms = PhhImsSms(slotId)
-    lateinit var sipHandler: SipHandler
+    @Volatile private var currentSip: SipHandler? = null
+    val sipHandler: SipHandler get() = currentSip ?: throw IllegalStateException("No SIM in slot $slotId")
+    fun sipHandlerOrNull(): SipHandler? = currentSip
+    private var sipSubId = SubscriptionManager.INVALID_SUBSCRIPTION_ID
+    private var featureReady = false
+    private val subscriptionsListener = object : SubscriptionManager.OnSubscriptionsChangedListener() {
+        override fun onSubscriptionsChanged() = syncSip()
+    }
     private var callListener: ImsCallSessionListener? = null
     private var outgoingState = State.IDLE
 
@@ -97,11 +105,6 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
         }
     }
 
-    fun getInstance(slotId: Int): PhhMmTelFeature {
-        Rlog.d(TAG, "$slotId getInstance")
-        return PhhMmTelFeature(slotId)
-    }
-
     override fun getFeatureState(): Int {
         Rlog.d(TAG, "$slotId getFeatureState")
         // always ready for now... Also STATE_INITIALIZING, STATE_UNAVAILABLE
@@ -125,21 +128,59 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
 
     override fun onFeatureReady() {
         Rlog.d(TAG, "$slotId onFeatureReady")
-        if(this::sipHandler.isInitialized) return
+        if (featureReady) return
+        featureReady = true
+        val imsService = PhhImsService.Companion.instance!!
+        imsService.getSystemService(SubscriptionManager::class.java)
+            .addOnSubscriptionsChangedListener(imsService.mainExecutor, subscriptionsListener)
+        syncSip()
+    }
 
+    // SIP follows the SIM in this slot: none without one, a fresh identity when it changes
+    @Synchronized
+    private fun syncSip() {
+        val imsService = PhhImsService.Companion.instance ?: return
+        val subId = imsService.getSystemService(SubscriptionManager::class.java)
+            .getActiveSubscriptionInfoForSimSlotIndex(slotId)?.subscriptionId
+            ?: SubscriptionManager.INVALID_SUBSCRIPTION_ID
+        if (subId == sipSubId) return
+        Rlog.d(TAG, "$slotId subscription changed from $sipSubId to $subId")
+        currentSip?.let {
+            currentSip = null
+            imsSms.sipHandler = null
+            it.shutdown()
+            imsService.getRegistration(slotId).onDeregistered(null)
+        }
+        sipSubId = subId
+        if (subId == SubscriptionManager.INVALID_SUBSCRIPTION_ID) return
+        var handler: SipHandler? = null
+        try {
+            handler = SipHandler(imsService, slotId)
+            startSip(imsService, handler)
+        } catch (e: Exception) {
+            // The caller of onFeatureReady swallows exceptions
+            Rlog.w(TAG, "$slotId could not start SIP", e)
+            if (currentSip === handler) currentSip = null
+            imsSms.sipHandler = null
+            handler?.shutdown()
+            imsService.getRegistration(slotId).onDeregistered(null)
+            sipSubId = SubscriptionManager.INVALID_SUBSCRIPTION_ID
+        }
+    }
+
+    private fun startSip(imsService: PhhImsService, handler: SipHandler) {
         // call onRegistering first then
         // register SIP here and call onRegistered after .. register.
-        val imsService = PhhImsService.Companion.instance!!
-        sipHandler = SipHandler(imsService)
-        sipHandler.imsFailureCallback = { imsService.getRegistration(slotId).onDeregistered(null) }
-        sipHandler.imsReadyCallback = {
-            imsService.getRegistration(slotId).onRegistered(REGISTRATION_TECH_LTE)
+        handler.imsFailureCallback = {
+            if (currentSip === handler) imsService.getRegistration(slotId).onDeregistered(null)
         }
-        imsSms.sipHandler = sipHandler
-        sipHandler.onSmsReceived = imsSms::onSmsReceived
-        sipHandler.onSmsStatusReportReceived = imsSms::onSmsStatusReportReceived
+        handler.imsReadyCallback = {
+            if (currentSip === handler) imsService.getRegistration(slotId).onRegistered(REGISTRATION_TECH_LTE)
+        }
+        handler.onSmsReceived = imsSms::onSmsReceived
+        handler.onSmsStatusReportReceived = imsSms::onSmsStatusReportReceived
 
-        sipHandler.onIncomingCall = { handle: Object, from: String, extras: Map<String, String> -> 
+        handler.onIncomingCall = { handle: Object, from: String, extras: Map<String, String> -> 
             val callProfile = ImsCallProfile(ImsCallProfile.SERVICE_TYPE_NORMAL, ImsCallProfile.CALL_TYPE_VOICE,
                 Bundle(),
                 ImsStreamMediaProfile(
@@ -213,16 +254,20 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
             }, Bundle())
             useAndroidCallAudio()
         }
-        sipHandler.onCancelledCall = cancelled@{ param: Object, s: String, map: Map<String, String> ->
+        handler.onCancelledCall = cancelled@{ param: Object, s: String, map: Map<String, String> ->
             if (outgoingState == State.TERMINATED) return@cancelled
             val statusCode = map["statusCode"]?.toInt() ?: -1
+            val lost = map["lost"] != null
             val reason = when {
                 statusCode >= 300 -> ImsReasonInfo(sipStatusToReason(statusCode), statusCode, map["statusString"])
+                // CS retry makes telephony redial the number over CS instead of failing it
+                lost && outgoingState == State.INITIATED -> ImsReasonInfo(ImsReasonInfo.CODE_LOCAL_CALL_CS_RETRY_REQUIRED, 0, null)
+                lost -> ImsReasonInfo(ImsReasonInfo.CODE_LOCAL_NETWORK_NO_SERVICE, 0, null)
                 map["local"] != null -> ImsReasonInfo(ImsReasonInfo.CODE_USER_TERMINATED, 0, null)
                 else -> ImsReasonInfo(ImsReasonInfo.CODE_USER_TERMINATED_BY_REMOTE, 0, null)
             }
             Rlog.d(TAG, "Call ended in outgoing state ${State.toString(outgoingState)}: $reason")
-            if (outgoingState == State.INITIATED && statusCode >= 300) {
+            if (outgoingState == State.INITIATED && (statusCode >= 300 || lost)) {
                 callListener?.callSessionInitiatingFailed(reason)
             } else {
                 callListener?.callSessionTerminated(reason)
@@ -230,8 +275,10 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
             outgoingState = State.TERMINATED
         }
 
+        currentSip = handler
+        imsSms.sipHandler = handler
         imsService.getRegistration(slotId).onRegistering(REGISTRATION_TECH_LTE)
-        sipHandler.getVolteNetwork()
+        handler.getVolteNetwork()
     }
 
     // MmTelFeature.setCallAudioHandler(AUDIO_HANDLER_ANDROID), API 34+: Telecom then uses MODE_IN_COMMUNICATION
@@ -279,6 +326,6 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
 
     override fun shouldProcessCall(numbers: Array<out String>): Int {
         Rlog.d(TAG, "Should process call? ${numbers.toList()}")
-        return PROCESS_CALL_IMS
+        return if (currentSip?.isRegistered == true) PROCESS_CALL_IMS else PROCESS_CALL_CSFB
     }
 }

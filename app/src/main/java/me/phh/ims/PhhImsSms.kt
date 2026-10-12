@@ -13,7 +13,7 @@ class PhhImsSms(val slotId: Int) : ImsSmsImplBase() {
         private const val TAG = "Phh ImsSms"
     }
 
-    lateinit var sipHandler: SipHandler
+    @Volatile var sipHandler: SipHandler? = null
 
     // phone -> outside API
     override fun sendSms(
@@ -40,7 +40,8 @@ class PhhImsSms(val slotId: Int) : ImsSmsImplBase() {
                 )
                 return
             }
-            if (::sipHandler.isInitialized == false) {
+            val handler = sipHandler
+            if (handler == null) {
                 onSendSmsResultError(
                     token,
                     messageRef,
@@ -50,7 +51,7 @@ class PhhImsSms(val slotId: Int) : ImsSmsImplBase() {
                 )
                 return
             }
-            sipHandler.sendSms(
+            handler.sendSms(
                 smsc,
                 pdu,
                 messageRef,
@@ -79,7 +80,7 @@ class PhhImsSms(val slotId: Int) : ImsSmsImplBase() {
 
         // open notification on error?
         val error = result != ImsSmsImplBase.DELIVER_STATUS_OK
-        sipHandler.sendSmsAck(token, messageRef, error)
+        sipHandler?.sendSmsAck(token, messageRef, error)
     }
     override fun acknowledgeSmsReport(token: Int, messageRef: Int, result: Int) {
         // called when android acks onSmsStatusReportReceived?

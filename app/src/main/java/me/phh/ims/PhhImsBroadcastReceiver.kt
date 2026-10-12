@@ -21,7 +21,7 @@ class PhhImsBroadcastReceiver : BroadcastReceiver() {
     override fun onReceive(ctxt: Context, intent: Intent) {
         Rlog.d(TAG, "Alarm fired with ${intent.action}")
         if (intent.action == ALARM_PERIODIC_REGISTER) {
-            val imsService = PhhImsService.Companion.instance!!
+            val imsService = PhhImsService.Companion.instance ?: return
             // rearm alarm
             imsService.armPeriodicRegisterAlarm()
             // stay awake until the REGISTER watchdog can judge the reply
@@ -31,7 +31,12 @@ class PhhImsBroadcastReceiver : BroadcastReceiver() {
             // XXX take some lock until this comes back?
             // (not function return, but callback after notify)
             CoroutineScope(Dispatchers.IO).launch {
-                imsService.mmTelFeature?.sipHandler?.register()
+                try {
+                    synchronized(imsService.mmTelFeatures) { imsService.mmTelFeatures.values.toList() }
+                        .forEach { it.sipHandlerOrNull()?.register() }
+                } catch (e: Exception) {
+                    Rlog.w(TAG, "Periodic REGISTER failed", e)
+                }
             }
             return
         }

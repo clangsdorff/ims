@@ -61,16 +61,11 @@ class PhhImsService : ImsService() {
         return builder.build()
     }
 
-    // XXX one per slot id...
-    var mmTelFeature: PhhMmTelFeature? = null
-    override fun createMmTelFeature(slotId: Int): MmTelFeature {
-        Rlog.d(TAG, "createMmTelFeature")
-        var feature = mmTelFeature
-        if (feature == null) {
-            feature = PhhMmTelFeature(slotId)
-            mmTelFeature = feature
-        }
-        return feature
+    // One per slot: a shared one got the incoming calls of whichever phone bound last
+    val mmTelFeatures = HashMap<Int, PhhMmTelFeature>()
+    override fun createMmTelFeature(slotId: Int): MmTelFeature = synchronized(mmTelFeatures) {
+        Rlog.d(TAG, "createMmTelFeature $slotId")
+        mmTelFeatures.getOrPut(slotId) { PhhMmTelFeature(slotId) }
     }
     override fun createRcsFeature(slotId: Int): RcsFeature? {
         Rlog.d(TAG, "createRcsFeature")
@@ -91,11 +86,10 @@ class PhhImsService : ImsService() {
         }
     }
 
-    // XXX cache one per slot id
-    val imsRegistration = ImsRegistrationImplBase()
-    override fun getRegistration(slotId: Int): ImsRegistrationImplBase {
+    private val imsRegistrations = HashMap<Int, ImsRegistrationImplBase>()
+    override fun getRegistration(slotId: Int): ImsRegistrationImplBase = synchronized(imsRegistrations) {
         Rlog.d(TAG, "getRegistration $slotId")
-        return imsRegistration
+        imsRegistrations.getOrPut(slotId) { ImsRegistrationImplBase() }
     }
 
     override fun onDestroy() {
