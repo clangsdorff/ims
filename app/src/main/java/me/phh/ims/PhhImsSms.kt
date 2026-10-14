@@ -59,12 +59,13 @@ class PhhImsSms(val slotId: Int) : ImsSmsImplBase() {
                     // success cb
                     onSendSmsResultSuccess(token, messageRef)
                 },
-                {
+                { fallback ->
                     // XXX better error code
                     onSendSmsResultError(
                         token,
                         messageRef,
-                        ImsSmsImplBase.SEND_STATUS_ERROR,
+                        if (fallback) ImsSmsImplBase.SEND_STATUS_ERROR_FALLBACK
+                        else ImsSmsImplBase.SEND_STATUS_ERROR,
                         SmsManager.RESULT_ERROR_GENERIC_FAILURE,
                         RESULT_NO_NETWORK_ERROR
                     )
@@ -72,6 +73,17 @@ class PhhImsSms(val slotId: Int) : ImsSmsImplBase() {
             )
         } catch(t: Throwable) {
             android.util.Log.e(TAG, "Failed sending sms", t)
+            try {
+                onSendSmsResultError(
+                    token,
+                    messageRef,
+                    ImsSmsImplBase.SEND_STATUS_ERROR_FALLBACK,
+                    SmsManager.RESULT_ERROR_GENERIC_FAILURE,
+                    RESULT_NO_NETWORK_ERROR
+                )
+            } catch(t2: Throwable) {
+                android.util.Log.e(TAG, "Failed reporting sms error", t2)
+            }
         }
     }
     override fun acknowledgeSms(token: Int, messageRef: Int, result: Int) {

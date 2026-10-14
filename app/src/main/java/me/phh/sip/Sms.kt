@@ -111,6 +111,18 @@ fun ByteArray.SipSmsDecode(): SipSms? {
     }
 }
 
+// ImsSmsDispatcher hands over the hex of the encoded SC address (length, TOA, BCD), not a number
+fun SmsSmscFromFramework(smsc: String?): String? {
+    if (smsc.isNullOrEmpty()) return null
+    val bytes = try { smsc.hexToByteArray() } catch (t: Throwable) { null }
+    if (bytes != null && bytes.size >= 2 && (bytes[0].toInt() and 0xff) == bytes.size - 1) {
+        return PhoneNumberUtils.calledPartyBCDToString(
+            bytes, 1, bytes.size - 1, PhoneNumberUtils.BCD_EXTENDED_TYPE_CALLED_PARTY
+        )?.trimStart('+')?.ifEmpty { null }
+    }
+    return Regex("^\\+?([0-9]+)$").find(smsc)?.groupValues?.get(1)
+}
+
 fun SipSmsEncodeSms(ref: Byte, smsc: String?, pdu: ByteArray): ByteArray {
     /* get smsc BCD representation first to compute encoded length */
     val smscBcd =
