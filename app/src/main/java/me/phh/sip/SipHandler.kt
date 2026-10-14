@@ -2130,11 +2130,7 @@ Supported: 100rel, replaces, timer
                 }
             }
             SmsType.RP_ACK_FROM_NETWORK -> {
-                try {
-                    onSmsStatusReportReceived?.invoke(sms.ref.toInt(), "3gpp", ByteArray(2))
-                } catch(t: Throwable) {
-                    Rlog.d(TAG, "Failed sending SMS ACK to framework", t)
-                }
+                Rlog.d(TAG, "SMS RP-ACK from network, ref ${sms.ref}")
             }
             SmsType.RP_ERROR_FROM_NETWORK -> {
                 Rlog.d(TAG, "SMS error from network")
@@ -2149,12 +2145,8 @@ Supported: 100rel, replaces, timer
         pdu: ByteArray,
         ref: Int,
         successCb: (() -> Unit),
-        failCb: (() -> Unit)
+        failCb: ((fallback: Boolean) -> Unit)
     ) {
-        val decodableSmsc = try {
-            PhoneNumberUtils.numberToCalledPartyBCD(smsSmsc, PhoneNumberUtils.BCD_EXTENDED_TYPE_CALLED_PARTY); true
-        } catch (t:Throwable) { false }
-
         val smsManager =
             ctxt.getSystemService(SmsManager::class.java).createForSubscriptionId(subId)
         val smscIdentity = try {
@@ -2165,30 +2157,19 @@ Supported: 100rel, replaces, timer
         } catch (t: Throwable) { null }
         Rlog.d(TAG, "Got smscIdentity $smscIdentity")
         // make ref up?
-        val smsc =
-            if (smsSmsc != null && decodableSmsc) smsSmsc
-            else if (forceSmsc != null) forceSmsc
-            else {
-                try {
-                    Rlog.d(TAG, "Got smsc $smscIdentity // host is ${smscIdentity?.host} // ${smscIdentity?.scheme} // ${smscIdentity?.path}")
-                    smscIdentity!!.host!!
-                } catch(t: Throwable) {
-                    try {
-                        Rlog.d(TAG, "getSmscIdentity failed", t)
-                        val smscStr = smsManager.smscAddress
-                        val smscMatchRegex = Regex("([0-9]+)")
-                        Rlog.d(TAG, "Got smsc $smscStr, match ${smscMatchRegex.find(smscStr!!)}")
-                        val match = smscMatchRegex.find(smscStr!!)!!
-                        match.groupValues[1]
-                    } catch(t: Throwable) {
-                        Rlog.d(TAG, "smscAddress failed", t)
-                        null
-                    }
-                }
-            }
+        val smsc = SmsSmscFromFramework(smsSmsc)
+            ?: forceSmsc
+            ?: smscIdentity?.host
+            ?: try {
+                smsManager.smscAddress?.let { Regex("[0-9]+").find(it)?.value }
+            } catch (t: Throwable) { null }
+        if (smsc == null) {
+            Rlog.w(TAG, "No SMSC for $smsSmsc, falling back")
+            failCb(true)
+            return
+        }
 
-        // smsc
-        val data = SipSmsEncodeSms(ref.toByte(), if(smsc == null) "" else "+$smsc", pdu)
+        val data = SipSmsEncodeSms(ref.toByte(), "+$smsc", pdu)
         Rlog.d(TAG, "sending sms ${data.toHex()} to smsc $smsc")
         val dest =
             if(smscIdentity != null)
@@ -2224,14 +2205,14 @@ Supported: 100rel, replaces, timer
                 if (resp.statusCode == 200 || resp.statusCode == 202) {
                     successCb()
                 } else {
-                    failCb()
+                    failCb(false)
                 }
                 true
             }
         )
         if (!send(msg)) {
             cbLock.withLock { responseCallbacks -= msg.headers["call-id"]!![0] }
-            failCb()
+            failCb(true)
         }
     }
 
