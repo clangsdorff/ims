@@ -16,6 +16,10 @@ public class PhhMmTelFeatureProtected extends MmTelFeature {
 	private final static String TAG = "Phh MmTelFeatureProtected";
 	private int slotId;
 	private int capabilities;
+	// Capabilities the active backend can actually serve
+	protected volatile int capabilityMask =
+		MmTelCapabilities.CAPABILITY_TYPE_VOICE |
+		MmTelCapabilities.CAPABILITY_TYPE_SMS;
 	public PhhMmTelFeatureProtected(int slotId) {
 		this.slotId = slotId;
 		// Set what we want to support here.
@@ -53,7 +57,7 @@ public class PhhMmTelFeatureProtected extends MmTelFeature {
 		Rlog.d(TAG, "Final capabilities: " + this.capabilities);
 
 		MmTelFeature.MmTelCapabilities capabilities = new MmTelFeature.MmTelCapabilities();
-		capabilities.addCapabilities(this.capabilities);
+		capabilities.addCapabilities(this.capabilities & capabilityMask);
 		notifyCapabilitiesStatusChanged(capabilities);
 	}
 }
