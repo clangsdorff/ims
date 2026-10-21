@@ -17,6 +17,7 @@ import android.telephony.ims.stub.ImsMultiEndpointImplBase
 import android.telephony.ims.stub.ImsRegistrationImplBase.REGISTRATION_TECH_LTE
 import android.telephony.ims.stub.ImsSmsImplBase
 import android.telephony.ims.stub.ImsUtImplBase
+import me.phh.mtk.MtkImsHandler
 import me.phh.sip.SipHandler
 import me.phh.sip.randomBytes
 import me.phh.sip.toHex
@@ -32,6 +33,7 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
     }
 
     val imsSms = PhhImsSms(slotId)
+    @Volatile private var currentMtk: MtkImsHandler? = null
     @Volatile private var currentSip: SipHandler? = null
     val sipHandler: SipHandler get() = currentSip ?: throw IllegalStateException("No SIM in slot $slotId")
     fun sipHandlerOrNull(): SipHandler? = currentSip
@@ -145,6 +147,11 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
             ?: SubscriptionManager.INVALID_SUBSCRIPTION_ID
         if (subId == sipSubId) return
         Rlog.d(TAG, "$slotId subscription changed from $sipSubId to $subId")
+        currentMtk?.let {
+            currentMtk = null
+            it.shutdown()
+            imsService.getRegistration(slotId).onDeregistered(null)
+        }
         currentSip?.let {
             currentSip = null
             imsSms.sipHandler = null
@@ -153,6 +160,10 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
         }
         sipSubId = subId
         if (subId == SubscriptionManager.INVALID_SUBSCRIPTION_ID) return
+        if (MtkImsHandler.isAvailable(slotId)) {
+            startMtk(imsService)
+            return
+        }
         var handler: SipHandler? = null
         try {
             handler = SipHandler(imsService, slotId)
@@ -166,6 +177,23 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
             imsService.getRegistration(slotId).onDeregistered(null)
             sipSubId = SubscriptionManager.INVALID_SUBSCRIPTION_ID
         }
+    }
+
+    // The modem registers on its own; calls and SMS stay on CS until they are wired to the modem
+    private fun startMtk(imsService: PhhImsService) {
+        Rlog.d(TAG, "$slotId using the MediaTek modem IMS")
+        capabilityMask = 0
+        notifyCapabilitiesStatusChanged(MmTelCapabilities())
+        val handler = MtkImsHandler(imsService, slotId)
+        handler.onRegistered = {
+            if (currentMtk === handler) imsService.getRegistration(slotId).onRegistered(REGISTRATION_TECH_LTE)
+        }
+        handler.onDeregistered = {
+            if (currentMtk === handler) imsService.getRegistration(slotId).onDeregistered(null)
+        }
+        currentMtk = handler
+        imsService.getRegistration(slotId).onRegistering(REGISTRATION_TECH_LTE)
+        handler.start()
     }
 
     private fun startSip(imsService: PhhImsService, handler: SipHandler) {
