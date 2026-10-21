@@ -29,6 +29,7 @@ class MtkImsHandler(private val ctx: Context, private val slotId: Int) {
         private const val TX_IMS_BEARER_STATE_CONFIRM = 1
         private const val TX_SET_IMS_BEARER_NOTIFICATION = 2
         private const val TX_SET_IMS_REGISTRATION_REPORT = 12
+        private const val TX_SET_IMS_CFG_FEATURE_VALUE = 39
         private const val TX_SET_RESPONSE_FUNCTIONS = 58
 
         private const val IND_IMS_BEARER_STATE_NOTIFY = 1
@@ -39,6 +40,10 @@ class MtkImsHandler(private val ctx: Context, private val slotId: Int) {
         private const val BEARER_ACTION_REQUEST = 1
         private const val BEARER_STATUS_OK = 0
         private const val BEARER_STATUS_FAIL = 1
+
+        // ImsConfig.FeatureConstants.FEATURE_TYPE_VOICE_OVER_LTE on TelephonyManager.NETWORK_TYPE_LTE
+        private const val FEATURE_VOICE_OVER_LTE = 0
+        private const val NETWORK_TYPE_LTE = 13
 
         private fun serviceName(slotId: Int) = "$IMS/slot${slotId + 1}"
 
@@ -59,6 +64,10 @@ class MtkImsHandler(private val ctx: Context, private val slotId: Int) {
     @Volatile private var stopped = false
 
     private var imsNetworkCallback: ConnectivityManager.NetworkCallback? = null
+    // featureId to (network, value), replayed whenever the radio connects
+    private val features = HashMap<Int, Pair<Int, Int>>().apply {
+        put(FEATURE_VOICE_OVER_LTE, Pair(NETWORK_TYPE_LTE, 1))
+    }
 
     private val deathRecipient = IBinder.DeathRecipient {
         Rlog.w(TAG, "$slotId radio died")
@@ -169,6 +178,29 @@ class MtkImsHandler(private val ctx: Context, private val slotId: Int) {
             it.writeInt(nextSerial())
             it.writeInt(1)
             it.writeInt(1)
+        }
+        sendFeatures()
+    }
+
+    // The modem only brings IMS up once it is told the feature is on, as MediaTek's ImsConfig does
+    fun setFeature(featureId: Int, network: Int, value: Int) = handler.post {
+        if (features[featureId] == Pair(network, value)) return@post
+        features[featureId] = Pair(network, value)
+        sendFeatures()
+    }
+
+    private fun sendFeatures() {
+        val list = features.entries.toList()
+        list.forEachIndexed { i, (featureId, nv) ->
+            Rlog.d(TAG, "$slotId feature $featureId network ${nv.first} value ${nv.second}")
+            call(TX_SET_IMS_CFG_FEATURE_VALUE) {
+                it.writeInt(nextSerial())
+                it.writeInt(featureId)
+                it.writeInt(nv.first)
+                it.writeInt(nv.second)
+                it.writeInt(if (i == list.size - 1) 1 else 0)
+                it.writeInt(1)
+            }
         }
     }
 

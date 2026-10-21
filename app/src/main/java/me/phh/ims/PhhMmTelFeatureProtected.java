@@ -40,6 +40,7 @@ public class PhhMmTelFeatureProtected extends MmTelFeature {
 		toEnable.forEach((pair) -> {
 			int cap = pair.getCapability();
 			Rlog.d(TAG, "Adding " + cap + " to " + pair.getRadioTech());
+			onCapabilityRequested(cap, pair.getRadioTech(), true);
 			if(pair.getRadioTech() == ImsRegistrationImplBase.REGISTRATION_TECH_LTE) {
 				this.capabilities |= cap;
 			}
@@ -50,6 +51,7 @@ public class PhhMmTelFeatureProtected extends MmTelFeature {
 		toDisable.forEach((pair) -> {
 			int cap = pair.getCapability();
 			Rlog.d(TAG, "Removing " + cap + " to " + pair.getRadioTech());
+			onCapabilityRequested(cap, pair.getRadioTech(), false);
 			if(pair.getRadioTech() == ImsRegistrationImplBase.REGISTRATION_TECH_LTE) {
 				this.capabilities &= ~cap;
 			}
@@ -59,5 +61,8 @@ public class PhhMmTelFeatureProtected extends MmTelFeature {
 		MmTelFeature.MmTelCapabilities capabilities = new MmTelFeature.MmTelCapabilities();
 		capabilities.addCapabilities(this.capabilities & capabilityMask);
 		notifyCapabilitiesStatusChanged(capabilities);
+	}
+
+	protected void onCapabilityRequested(int capability, int radioTech, boolean enabled) {
 	}
 }

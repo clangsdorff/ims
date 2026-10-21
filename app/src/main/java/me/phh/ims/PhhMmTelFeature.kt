@@ -14,6 +14,7 @@ import android.telephony.ims.feature.MmTelFeature
 import android.telephony.ims.stub.ImsCallSessionImplBase
 import android.telephony.ims.stub.ImsCallSessionImplBase.State
 import android.telephony.ims.stub.ImsMultiEndpointImplBase
+import android.telephony.ims.stub.ImsRegistrationImplBase.REGISTRATION_TECH_IWLAN
 import android.telephony.ims.stub.ImsRegistrationImplBase.REGISTRATION_TECH_LTE
 import android.telephony.ims.stub.ImsSmsImplBase
 import android.telephony.ims.stub.ImsUtImplBase
@@ -194,6 +195,27 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
         currentMtk = handler
         imsService.getRegistration(slotId).onRegistering(REGISTRATION_TECH_LTE)
         handler.start()
+    }
+
+    // Same feature and network ids as MediaTek's MtkMmTelFeature.convertCapability
+    override fun onCapabilityRequested(capability: Int, radioTech: Int, enabled: Boolean) {
+        val handler = currentMtk ?: return
+        val (featureId, network) = when (radioTech) {
+            REGISTRATION_TECH_LTE -> when (capability) {
+                MmTelCapabilities.CAPABILITY_TYPE_VOICE -> Pair(0, 13)
+                MmTelCapabilities.CAPABILITY_TYPE_VIDEO -> Pair(1, 13)
+                MmTelCapabilities.CAPABILITY_TYPE_UT -> Pair(4, 13)
+                else -> return
+            }
+            REGISTRATION_TECH_IWLAN -> when (capability) {
+                MmTelCapabilities.CAPABILITY_TYPE_VOICE -> Pair(2, 18)
+                MmTelCapabilities.CAPABILITY_TYPE_VIDEO -> Pair(3, 18)
+                MmTelCapabilities.CAPABILITY_TYPE_UT -> Pair(5, 18)
+                else -> return
+            }
+            else -> return
+        }
+        handler.setFeature(featureId, network, if (enabled) 1 else 0)
     }
 
     private fun startSip(imsService: PhhImsService, handler: SipHandler) {
