@@ -136,7 +136,8 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
         val imsService = PhhImsService.Companion.instance!!
         imsService.getSystemService(SubscriptionManager::class.java)
             .addOnSubscriptionsChangedListener(imsService.mainExecutor, subscriptionsListener)
-        syncSip()
+        // onFeatureReady runs under the ImsFeature lock that notifyCapabilitiesStatusChanged takes from syncSip
+        imsService.mainExecutor.execute { syncSip() }
     }
 
     // SIP follows the SIM in this slot: none without one, a fresh identity when it changes
