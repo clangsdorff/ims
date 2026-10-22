@@ -35,6 +35,9 @@ class MtkImsHandler(private val ctx: Context, private val slotId: Int) {
         private const val IND_IMS_BEARER_STATE_NOTIFY = 1
         private const val IND_IMS_BEARER_INIT = 2
         private const val IND_IMS_REGISTRATION_INFO = 14
+        private const val IND_SIP_REG_INFO = 16
+        private const val IND_IMS_REG_STATUS_REPORT = 17
+        private const val IND_IMS_REG_INFO = 18
 
         private const val BEARER_ACTION_RELEASE = 0
         private const val BEARER_ACTION_REQUEST = 1
@@ -64,6 +67,7 @@ class MtkImsHandler(private val ctx: Context, private val slotId: Int) {
     @Volatile private var stopped = false
 
     private var imsNetworkCallback: ConnectivityManager.NetworkCallback? = null
+    private val sendFeaturesRunnable = Runnable { sendFeatures() }
     // featureId to (network, value), replayed whenever the radio connects
     private val features = HashMap<Int, Pair<Int, Int>>().apply {
         put(FEATURE_VOICE_OVER_LTE, Pair(NETWORK_TYPE_LTE, 1))
@@ -137,6 +141,31 @@ class MtkImsHandler(private val ctx: Context, private val slotId: Int) {
                     Rlog.d(TAG, "$slotId registration info state=$state capability=$capability")
                     handler.post { setRegistered(state == 1) }
                 }
+                IND_SIP_REG_INFO -> {
+                    data.readInt()
+                    val accountId = data.readInt()
+                    val responseCode = data.readInt()
+                    val info = data.createStringArray()
+                    Rlog.d(TAG, "$slotId sip reg info account=$accountId response=$responseCode ${info?.toList()}")
+                }
+                IND_IMS_REG_STATUS_REPORT -> {
+                    data.readInt()
+                    // readTypedObject: non-null marker, then the stable parcelable size
+                    if (data.readInt() != 0) {
+                        data.readInt()
+                        val reportType = data.readInt()
+                        val accountId = data.readInt()
+                        val expireTime = data.readInt()
+                        val errorCode = data.readInt()
+                        val uri = data.readString()
+                        val errorMsg = data.readString()
+                        Rlog.d(TAG, "$slotId reg status type=$reportType account=$accountId expire=$expireTime error=$errorCode uri=$uri msg=$errorMsg")
+                    }
+                }
+                IND_IMS_REG_INFO -> {
+                    data.readInt()
+                    Rlog.d(TAG, "$slotId ims reg info ${data.createIntArray()?.toList()}")
+                }
                 else -> Rlog.d(TAG, "$slotId indication $code")
             }
         }
@@ -186,7 +215,9 @@ class MtkImsHandler(private val ctx: Context, private val slotId: Int) {
     fun setFeature(featureId: Int, network: Int, value: Int) = handler.post {
         if (features[featureId] == Pair(network, value)) return@post
         features[featureId] = Pair(network, value)
-        sendFeatures()
+        // One batch for all the changes of a capability request
+        handler.removeCallbacks(sendFeaturesRunnable)
+        handler.post(sendFeaturesRunnable)
     }
 
     private fun sendFeatures() {
