@@ -57,8 +57,14 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
         Rlog.d(TAG, "$slotId createCallSession")
         return object: ImsCallSessionImplBase() {
             private val mCallId = randomBytes(12).toHex()
+            private var mCallProfile = profile
             override fun getCallId(): String {
                 return mCallId
+            }
+
+            // ImsCall reloads the profile from here on every progress callback
+            override fun getCallProfile(): ImsCallProfile {
+                return mCallProfile
             }
 
             override fun close() {
@@ -75,6 +81,7 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
 
             override fun start(callee: String, profile: ImsCallProfile) {
                 Rlog.d(TAG, "Starting call with $callee profile $profile")
+                mCallProfile = profile
                 outgoingState = State.INITIATED
                 useAndroidCallAudio()
                 sipHandler.onOutgoingCallProgress = { statusCode, localRingback ->
