@@ -77,9 +77,18 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
                 Rlog.d(TAG, "Starting call with $callee profile $profile")
                 outgoingState = State.INITIATED
                 useAndroidCallAudio()
-                sipHandler.onOutgoingCallProgress = { statusCode ->
+                sipHandler.onOutgoingCallProgress = { statusCode, localRingback ->
                     if (statusCode in 180..189) {
-                        callListener?.callSessionProgressing(profile.mediaProfile)
+                        val media = profile.mediaProfile
+                        // The framework plays its own ringback only while the audio direction is inactive
+                        callListener?.callSessionProgressing(ImsStreamMediaProfile(
+                            media.audioQuality,
+                            if (localRingback) ImsStreamMediaProfile.DIRECTION_INACTIVE
+                            else ImsStreamMediaProfile.DIRECTION_SEND_RECEIVE,
+                            media.videoQuality,
+                            media.videoDirection,
+                            media.rttMode,
+                        ))
                     } else if (statusCode == 200) {
                         outgoingState = State.ESTABLISHED
                         callListener?.callSessionInitiated(profile)

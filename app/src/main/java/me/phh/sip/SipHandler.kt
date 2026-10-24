@@ -157,7 +157,7 @@ class SipHandler(val ctxt: Context, val slotId: Int) {
         null
     var onCancelledCall: ((handle: Object, from: String, extras: Map<String, String>) -> Unit)? =
         null
-    var onOutgoingCallProgress: ((statusCode: Int) -> Unit)? = null
+    var onOutgoingCallProgress: ((statusCode: Int, localRingback: Boolean) -> Unit)? = null
     private val smsLock = ReentrantLock()
     private var smsToken = 0
     private val smsHeadersMap = mutableMapOf<Int, smsHeaders>()
@@ -1478,6 +1478,8 @@ a=sendrecv
                 )
             if (activeCallId != callId) return@worker
             outgoingInvite = msg
+            var ringing = false
+            var networkEarlyMedia = false
             setResponseCallback(msg.headers["call-id"]!![0]) { r: SipResponse ->
                 var resp = r
                 var cseq = resp.headers["cseq"]!![0]
@@ -1493,7 +1495,14 @@ a=sendrecv
 
                 if (cseq.contains("ACK")) return@setResponseCallback  false
 
-                if (cseq.contains("INVITE") && !rseqHandled) onOutgoingCallProgress?.invoke(resp.statusCode)
+                if (cseq.contains("INVITE") && !rseqHandled) {
+                    if (resp.statusCode == 180) ringing = true
+                    // RFC 5009: the last P-Early-Media decides whether the network sends the ringback
+                    resp.headers["p-early-media"]?.let { pem ->
+                        networkEarlyMedia = pem.any { it.lowercase().contains(Regex("sendrecv|sendonly")) }
+                    }
+                    onOutgoingCallProgress?.invoke(resp.statusCode, ringing && !networkEarlyMedia)
+                }
 
                 if (cseq.contains("INVITE") && (resp.statusCode == 200 || resp.statusCode == 202)) {
                     // TODO Send UI that call started
