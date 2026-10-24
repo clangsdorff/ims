@@ -86,6 +86,7 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
                 useAndroidCallAudio()
                 sipHandler.onOutgoingCallProgress = { statusCode, localRingback ->
                     if (statusCode in 180..189) {
+                        if (outgoingState == State.INITIATED) outgoingState = State.ESTABLISHING
                         val media = profile.mediaProfile
                         // The framework plays its own ringback only while the audio direction is inactive
                         callListener?.callSessionProgressing(ImsStreamMediaProfile(
@@ -334,7 +335,9 @@ class PhhMmTelFeature(val slotId: Int) : PhhMmTelFeatureProtected(slotId) {
                 else -> ImsReasonInfo(ImsReasonInfo.CODE_USER_TERMINATED_BY_REMOTE, 0, null)
             }
             Rlog.d(TAG, "Call ended in outgoing state ${State.toString(outgoingState)}: $reason")
-            if (outgoingState == State.INITIATED && (statusCode >= 300 || lost)) {
+            // After a progress callback telephony ignores a start failure unless it asks for a CS retry
+            if ((outgoingState == State.INITIATED && (statusCode >= 300 || lost)) ||
+                reason.code == ImsReasonInfo.CODE_LOCAL_CALL_CS_RETRY_REQUIRED) {
                 callListener?.callSessionInitiatingFailed(reason)
             } else {
                 callListener?.callSessionTerminated(reason)
