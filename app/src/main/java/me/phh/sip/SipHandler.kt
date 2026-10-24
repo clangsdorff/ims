@@ -1314,7 +1314,7 @@ a=sendrecv
         }
     }
 
-    fun terminateCall() {
+    fun terminateCall(extras: Map<String, String> = mapOf("local" to "true")) {
         val invite = outgoingInvite
         val inInvite = incomingInvite
         val call = currentCall
@@ -1352,7 +1352,7 @@ a=sendrecv
         // ImsCallSessionImplBase calls terminate() on the main thread
         if (msg != null) worker("terminate-call") { send(msg) }
 
-        onCancelledCall?.invoke(Object(), "", mapOf("local" to "true"))
+        onCancelledCall?.invoke(Object(), "", extras)
     }
 
     /*
@@ -1496,6 +1496,15 @@ a=sendrecv
                 if (cseq.contains("ACK")) return@setResponseCallback  false
 
                 if (cseq.contains("INVITE") && !rseqHandled) {
+                    // RFC 3326: a provisional response with a final SIP cause only precedes an announcement
+                    val finalCause = resp.headers["reason"].orEmpty().firstNotNullOfOrNull {
+                        Regex("SIP\\s*;\\s*cause=(\\d+)").find(it)?.groupValues?.get(1)?.toInt()
+                    }
+                    if (resp.statusCode in 180..189 && finalCause != null && finalCause >= 400) {
+                        Rlog.d(TAG, "Ending the call on ${resp.statusCode} with cause $finalCause")
+                        terminateCall(mapOf("statusCode" to finalCause.toString()))
+                        return@setResponseCallback false
+                    }
                     if (resp.statusCode == 180) ringing = true
                     // RFC 5009: the last P-Early-Media decides whether the network sends the ringback
                     resp.headers["p-early-media"]?.let { pem ->
